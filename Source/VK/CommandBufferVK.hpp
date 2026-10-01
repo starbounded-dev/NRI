@@ -808,7 +808,11 @@ NRI_INLINE void CommandBufferVK::ReadbackTextureToBuffer(Buffer& dstBuffer, cons
     const BufferVK& dst = (BufferVK&)dstBuffer;
     const FormatProps& formatProps = GetFormatProps(src.GetDesc().format);
 
-    uint32_t rowBlockNum = dstDataLayout.rowPitch / formatProps.stride;
+    // A depth-only copy of D32S8 addresses four-byte Vulkan depth elements,
+    // not the eight-byte combined format. Keep the public format table intact.
+    const uint32_t planeStride = srcRegion.planes == PlaneBits::DEPTH && src.GetDesc().format == Format::D32_SFLOAT_S8_UINT_X24
+        ? 4 : formatProps.stride;
+    uint32_t rowBlockNum = dstDataLayout.rowPitch / planeStride;
     uint32_t bufferRowLength = rowBlockNum * formatProps.blockWidth;
 
     uint32_t sliceRowNum = dstDataLayout.slicePitch / dstDataLayout.rowPitch;
