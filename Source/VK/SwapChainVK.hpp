@@ -43,6 +43,7 @@ Result SwapChainVK::Create(const SwapChainDesc& swapChainDesc) {
             VkWin32SurfaceCreateInfoKHR win32SurfaceInfo = {VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
             win32SurfaceInfo.hwnd = (HWND)swapChainDesc.window.windows.hwnd;
 
+            NRI_RETURN_ON_FAILURE(&m_Device, vk.CreateWin32SurfaceKHR, Result::UNSUPPORTED, "'VK_KHR_win32_surface' is not enabled"); // (Lux patch)
             VkResult vkResult = vk.CreateWin32SurfaceKHR(m_Device, &win32SurfaceInfo, m_Device.GetVkAllocationCallbacks(), &m_Surface);
             NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "vkCreateWin32SurfaceKHR");
         }
@@ -53,6 +54,7 @@ Result SwapChainVK::Create(const SwapChainDesc& swapChainDesc) {
             xlibSurfaceInfo.dpy = (::Display*)swapChainDesc.window.x11.dpy;
             xlibSurfaceInfo.window = (::Window)swapChainDesc.window.x11.window;
 
+            NRI_RETURN_ON_FAILURE(&m_Device, vk.CreateXlibSurfaceKHR, Result::UNSUPPORTED, "'VK_KHR_xlib_surface' is not enabled"); // (Lux patch)
             VkResult vkResult = vk.CreateXlibSurfaceKHR(m_Device, &xlibSurfaceInfo, m_Device.GetVkAllocationCallbacks(), &m_Surface);
             NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "vkCreateXlibSurfaceKHR");
         }
@@ -63,6 +65,7 @@ Result SwapChainVK::Create(const SwapChainDesc& swapChainDesc) {
             waylandSurfaceInfo.display = (wl_display*)swapChainDesc.window.wayland.display;
             waylandSurfaceInfo.surface = (wl_surface*)swapChainDesc.window.wayland.surface;
 
+            NRI_RETURN_ON_FAILURE(&m_Device, vk.CreateWaylandSurfaceKHR, Result::UNSUPPORTED, "'VK_KHR_wayland_surface' is not enabled"); // (Lux patch)
             VkResult vkResult = vk.CreateWaylandSurfaceKHR(m_Device, &waylandSurfaceInfo, m_Device.GetVkAllocationCallbacks(), &m_Surface);
             NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "vkCreateWaylandSurfaceKHR");
         }
@@ -72,6 +75,7 @@ Result SwapChainVK::Create(const SwapChainDesc& swapChainDesc) {
             VkMetalSurfaceCreateInfoEXT metalSurfaceCreateInfo = {VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT};
             metalSurfaceCreateInfo.pLayer = (CAMetalLayer*)swapChainDesc.window.metal.caMetalLayer;
 
+            NRI_RETURN_ON_FAILURE(&m_Device, vk.CreateMetalSurfaceEXT, Result::UNSUPPORTED, "'VK_EXT_metal_surface' is not enabled"); // (Lux patch)
             VkResult vkResult = vk.CreateMetalSurfaceEXT(m_Device, &metalSurfaceCreateInfo, m_Device.GetVkAllocationCallbacks(), &m_Surface);
             NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "vkCreateMetalSurfaceEXT");
         }
@@ -81,6 +85,7 @@ Result SwapChainVK::Create(const SwapChainDesc& swapChainDesc) {
             VkAndroidSurfaceCreateInfoKHR androidSurfaceInfo = {VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR};
             androidSurfaceInfo.window = (ANativeWindow*)swapChainDesc.window.android.nativeWindow;
 
+            NRI_RETURN_ON_FAILURE(&m_Device, vk.CreateAndroidSurfaceKHR, Result::UNSUPPORTED, "'VK_KHR_android_surface' is not enabled"); // (Lux patch)
             VkResult vkResult = vk.CreateAndroidSurfaceKHR(m_Device, &androidSurfaceInfo, m_Device.GetVkAllocationCallbacks(), &m_Surface);
             NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "vkCreateAndroidSurfaceKHR");
         }

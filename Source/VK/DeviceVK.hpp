@@ -2165,20 +2165,28 @@ Result DeviceVK::ResolveInstanceDispatchTable(const Vector<const char*>& desired
         GET_INSTANCE_FUNC(GetPhysicalDeviceSurfacePresentModesKHR);
         GET_INSTANCE_FUNC(DestroySurfaceKHR);
 
+        // (Lux patch) Only the platform surface extensions that are enabled. A wrapped instance
+        // ("nriCreateDeviceFromVKDevice") usually enables just the one its window system uses, and
+        // "vkGetInstanceProcAddr" returns NULL for the others. "SwapChainVK::Create" reports a missing one.
 #ifdef VK_USE_PLATFORM_WIN32_KHR
-        GET_INSTANCE_FUNC(CreateWin32SurfaceKHR);
+        if (IsExtensionSupported(VK_KHR_WIN32_SURFACE_EXTENSION_NAME, desiredInstanceExts))
+            GET_INSTANCE_FUNC(CreateWin32SurfaceKHR);
 #endif
 #ifdef VK_USE_PLATFORM_XLIB_KHR
-        GET_INSTANCE_FUNC(CreateXlibSurfaceKHR);
+        if (IsExtensionSupported(VK_KHR_XLIB_SURFACE_EXTENSION_NAME, desiredInstanceExts))
+            GET_INSTANCE_FUNC(CreateXlibSurfaceKHR);
 #endif
 #ifdef VK_USE_PLATFORM_WAYLAND_KHR
-        GET_INSTANCE_FUNC(CreateWaylandSurfaceKHR);
+        if (IsExtensionSupported(VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME, desiredInstanceExts))
+            GET_INSTANCE_FUNC(CreateWaylandSurfaceKHR);
 #endif
 #ifdef VK_USE_PLATFORM_METAL_EXT
-        GET_INSTANCE_FUNC(CreateMetalSurfaceEXT);
+        if (IsExtensionSupported(VK_EXT_METAL_SURFACE_EXTENSION_NAME, desiredInstanceExts))
+            GET_INSTANCE_FUNC(CreateMetalSurfaceEXT);
 #endif
 #ifdef VK_USE_PLATFORM_ANDROID_KHR
-        GET_INSTANCE_FUNC(CreateAndroidSurfaceKHR);
+        if (IsExtensionSupported(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME, desiredInstanceExts))
+            GET_INSTANCE_FUNC(CreateAndroidSurfaceKHR);
 #endif
     }
 
