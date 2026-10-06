@@ -1,15 +1,15 @@
 // © 2021 NVIDIA Corporation
 
-static inline DXGI_FORMAT GetShaderFormatForDepth(DXGI_FORMAT format) {
+static inline DXGI_FORMAT GetPatchedShaderResourceViewFormat(DXGI_FORMAT format, PlaneBits planes) {
     switch (format) {
         case DXGI_FORMAT_D16_UNORM:
             return DXGI_FORMAT_R16_UNORM;
         case DXGI_FORMAT_D24_UNORM_S8_UINT:
-            return DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+            return (planes & PlaneBits::STENCIL) ? DXGI_FORMAT_X24_TYPELESS_G8_UINT : DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
         case DXGI_FORMAT_D32_FLOAT:
             return DXGI_FORMAT_R32_FLOAT;
         case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
-            return DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
+            return (planes & PlaneBits::STENCIL) ? DXGI_FORMAT_X32_TYPELESS_G8X24_UINT : DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
         default:
             return format;
     }
@@ -84,9 +84,11 @@ Result DescriptorD3D11::Create(const TextureViewDesc& textureViewDesc) {
                 desc.Texture1DArray.ArraySize = layerNum;
                 desc.Format = format;
 
-                if (textureViewDesc.readonlyPlanes & PlaneBits::DEPTH)
+                bool isDepthReadonly = textureViewDesc.planes != PlaneBits::ALL && (textureViewDesc.planes & PlaneBits::DEPTH) == 0;
+                bool isStencilReadonly = textureViewDesc.planes != PlaneBits::ALL && (textureViewDesc.planes & PlaneBits::STENCIL) == 0;
+                if (isDepthReadonly)
                     desc.Flags |= D3D11_DSV_READ_ONLY_DEPTH;
-                if (textureViewDesc.readonlyPlanes & PlaneBits::STENCIL)
+                if (isStencilReadonly)
                     desc.Flags |= D3D11_DSV_READ_ONLY_STENCIL;
 
                 hr = m_Device->CreateDepthStencilView(textureD3D11, &desc, (ID3D11DepthStencilView**)&m_Descriptor);
@@ -107,7 +109,7 @@ Result DescriptorD3D11::Create(const TextureViewDesc& textureViewDesc) {
                     desc.Texture2D.MostDetailedMip = textureViewDesc.mipOffset;
                     desc.Texture2D.MipLevels = mipNum;
                 }
-                desc.Format = GetShaderFormatForDepth(format);
+                desc.Format = GetPatchedShaderResourceViewFormat(format, textureViewDesc.planes);
 
                 hr = m_Device->CreateShaderResourceView(textureD3D11, &desc, (ID3D11ShaderResourceView**)&m_Descriptor);
             } break;
@@ -124,7 +126,7 @@ Result DescriptorD3D11::Create(const TextureViewDesc& textureViewDesc) {
                     desc.Texture2DArray.FirstArraySlice = textureViewDesc.layerOffset;
                     desc.Texture2DArray.ArraySize = layerNum;
                 }
-                desc.Format = GetShaderFormatForDepth(format);
+                desc.Format = GetPatchedShaderResourceViewFormat(format, textureViewDesc.planes);
 
                 hr = m_Device->CreateShaderResourceView(textureD3D11, &desc, (ID3D11ShaderResourceView**)&m_Descriptor);
             } break;
@@ -133,7 +135,7 @@ Result DescriptorD3D11::Create(const TextureViewDesc& textureViewDesc) {
                 desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURECUBE;
                 desc.TextureCube.MostDetailedMip = textureViewDesc.mipOffset;
                 desc.TextureCube.MipLevels = mipNum;
-                desc.Format = GetShaderFormatForDepth(format);
+                desc.Format = GetPatchedShaderResourceViewFormat(format, textureViewDesc.planes);
 
                 hr = m_Device->CreateShaderResourceView(textureD3D11, &desc, (ID3D11ShaderResourceView**)&m_Descriptor);
             } break;
@@ -144,7 +146,7 @@ Result DescriptorD3D11::Create(const TextureViewDesc& textureViewDesc) {
                 desc.TextureCubeArray.MipLevels = mipNum;
                 desc.TextureCubeArray.First2DArrayFace = textureViewDesc.layerOffset;
                 desc.TextureCubeArray.NumCubes = textureViewDesc.layerNum / 6;
-                desc.Format = GetShaderFormatForDepth(format);
+                desc.Format = GetPatchedShaderResourceViewFormat(format, textureViewDesc.planes);
 
                 hr = m_Device->CreateShaderResourceView(textureD3D11, &desc, (ID3D11ShaderResourceView**)&m_Descriptor);
             } break;
@@ -196,9 +198,11 @@ Result DescriptorD3D11::Create(const TextureViewDesc& textureViewDesc) {
                 }
                 desc.Format = format;
 
-                if (textureViewDesc.readonlyPlanes & PlaneBits::DEPTH)
+                bool isDepthReadonly = textureViewDesc.planes != PlaneBits::ALL && (textureViewDesc.planes & PlaneBits::DEPTH) == 0;
+                bool isStencilReadonly = textureViewDesc.planes != PlaneBits::ALL && (textureViewDesc.planes & PlaneBits::STENCIL) == 0;
+                if (isDepthReadonly)
                     desc.Flags |= D3D11_DSV_READ_ONLY_DEPTH;
-                if (textureViewDesc.readonlyPlanes & PlaneBits::STENCIL)
+                if (isStencilReadonly)
                     desc.Flags |= D3D11_DSV_READ_ONLY_STENCIL;
 
                 hr = m_Device->CreateDepthStencilView(textureD3D11, &desc, (ID3D11DepthStencilView**)&m_Descriptor);
@@ -270,10 +274,11 @@ Result DescriptorD3D11::Create(const TextureViewDesc& textureViewDesc) {
 Result DescriptorD3D11::Create(const BufferViewDesc& bufferViewDesc) {
     const BufferD3D11& bufferD3D11 = *(BufferD3D11*)bufferViewDesc.buffer;
     const BufferDesc& bufferDesc = bufferD3D11.GetDesc();
-    uint64_t size = bufferViewDesc.size == WHOLE_SIZE ? bufferDesc.size : bufferViewDesc.size;
+    uint64_t size = bufferViewDesc.size == WHOLE_SIZE ? (bufferDesc.size - bufferViewDesc.offset) : bufferViewDesc.size;
+    m_IsBufferView = true;
 
     Format patchedFormat = Format::UNKNOWN;
-    uint32_t structureStride = 0;
+    uint32_t structureStride = bufferViewDesc.structureStride ? bufferViewDesc.structureStride : bufferDesc.structureStride;
     bool isRaw = false;
 
     if (bufferViewDesc.type == BufferView::CONSTANT_BUFFER) {
@@ -282,12 +287,11 @@ Result DescriptorD3D11::Create(const BufferViewDesc& bufferViewDesc) {
         if (bufferViewDesc.offset != 0 && m_Device.GetVersion() == 0)
             NRI_REPORT_ERROR(&m_Device, "Constant buffers with non-zero offsets require 11.1+ feature level!");
     } else if (bufferViewDesc.type == BufferView::STRUCTURED_BUFFER || bufferViewDesc.type == BufferView::STORAGE_STRUCTURED_BUFFER) {
-        if (bufferViewDesc.structureStride != bufferDesc.structureStride) {
+        if (bufferDesc.byteAddress) {
             // D3D11 requires "structureStride" passed during creation, but we violate the spec and treat "structured" buffers as "raw" to allow multiple views creation for a single buffer // TODO: this may not work on some HW!
             patchedFormat = Format::R32_UINT;
             isRaw = true;
-        } else
-            structureStride = bufferDesc.structureStride;
+        }
     } else if (bufferViewDesc.type == BufferView::BYTE_ADDRESS_BUFFER || bufferViewDesc.type == BufferView::STORAGE_BYTE_ADDRESS_BUFFER) {
         patchedFormat = Format::R32_UINT;
         isRaw = true;
@@ -338,7 +342,7 @@ Result DescriptorD3D11::Create(const BufferViewDesc& bufferViewDesc) {
     NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D11Device::CreateXxxView");
 
     m_Format = patchedFormat;
-    m_SubresourceInfo.Initialize(&bufferD3D11, elementOffset, elementNum);
+    m_SubresourceInfo.Initialize(&bufferD3D11, (uint32_t)bufferViewDesc.offset, (uint32_t)size);
 
     return Result::SUCCESS;
 }

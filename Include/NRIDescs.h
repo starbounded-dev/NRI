@@ -1,4 +1,4 @@
-﻿// © 2021 NVIDIA Corporation
+// © 2021 NVIDIA Corporation
 
 #pragma once
 
@@ -51,8 +51,9 @@ NriForwardStruct(QueryPool);        // a collection of queries of the same type
 NriForwardStruct(Descriptor);       // a handle or pointer to a resource (potentially with a header)
 NriForwardStruct(CommandBuffer);    // used to record commands which can be subsequently submitted to a device queue for execution (aka command list)
 NriForwardStruct(DescriptorSet);    // a continuous set of descriptors
-NriForwardStruct(DescriptorPool);   // maintains a pool of descriptors, descriptor sets are allocated from (aka descriptor heap)
+NriForwardStruct(DescriptorPool);   // maintains a pool of descriptors, descriptor sets are allocated from
 NriForwardStruct(PipelineLayout);   // determines the interface between shader stages and shader resources (aka root signature)
+NriForwardStruct(PipelineCache);    // a persistent cache of compiled pipeline state objects (PSOs) to accelerate subsequent PSO creations
 NriForwardStruct(CommandAllocator); // an object that command buffer memory is allocated from
 
 // Basic types
@@ -75,7 +76,7 @@ NriStruct(Float2_t) {
 
 // Aliases
 static const uint32_t NriConstant(BGRA_UNUSED) = 0;     // only for "bgra" color for profiling
-static const uint32_t NriConstant(ALL) = 0;             // only for "sampleMask" and "descriptorNum"
+static const uint32_t NriConstant(ALL) = 0;             // only for "sampleMask"
 static const Nri(Dim_t) NriConstant(WHOLE_SIZE) = 0;    // only for "Dim_t" and "size"
 static const Nri(Dim_t) NriConstant(REMAINING) = 0;     // only for "mipNum" and "layerNum"
 
@@ -93,18 +94,20 @@ static const Nri(Dim_t) NriConstant(REMAINING) = 0;     // only for "mipNum" and
 #pragma region [ Common ]
 //============================================================================================================================================================================================
 
-NriEnum(GraphicsAPI, uint8_t,
-    NONE,   // Supports everything, does nothing, returns dummy non-NULL objects and ~0-filled descs, available if "NRI_ENABLE_NONE_SUPPORT = ON" in CMake
-    D3D11,  // Direct3D 11 (feature set 11.1), available if "NRI_ENABLE_D3D11_SUPPORT = ON" in CMake (https://microsoft.github.io/DirectX-Specs/d3d/archive/D3D11_3_FunctionalSpec.htm)
-    D3D12,  // Direct3D 12 (D3D12_SDK_VERSION 4 or 618+), available if "NRI_ENABLE_D3D12_SUPPORT = ON" in CMake (https://microsoft.github.io/DirectX-Specs/)
-    VK      // Vulkan 1.4, 1.3 or 1.2+ (can be used on MacOS via MoltenVK), available if "NRI_ENABLE_VK_SUPPORT = ON" in CMake (https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html)
+// "AdapterDesc::supportedGraphicsAPIs" is a mask of supported graphics APIs
+NriBits(GraphicsAPI, uint8_t,
+    NONE    = NriBit(0), // Supports everything, does nothing, returns dummy non-NULL objects and ~0-filled descs, available if "NRI_ENABLE_NONE_SUPPORT = ON" in CMake
+    D3D11   = NriBit(1), // Direct3D 11 (feature set 11.1), available if "NRI_ENABLE_D3D11_SUPPORT = ON" in CMake (https://microsoft.github.io/DirectX-Specs/d3d/archive/D3D11_3_FunctionalSpec.htm)
+    D3D12   = NriBit(2), // Direct3D 12 (D3D12_SDK_VERSION 4 or 619+), available if "NRI_ENABLE_D3D12_SUPPORT = ON" in CMake (https://microsoft.github.io/DirectX-Specs/)
+    VK      = NriBit(3), // Vulkan 1.4+, 1.3++ or 1.2+++ (can be used on MacOS via MoltenVK), available if "NRI_ENABLE_VK_SUPPORT = ON" in CMake (https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html)
+    WGPU    = NriBit(4)  // WebGPU via "wgpu-native", available if "NRI_ENABLE_WGPU_SUPPORT = ON" in CMake (https://github.com/gfx-rs/wgpu-native). Has limitations similar to D3D11
 );
 
 NriEnum(Result, int8_t,
     // All bad, but optionally require an action ("callbackInterface.AbortExecution" is not triggered)
     DEVICE_LOST             = -3,   // may be returned by "QueueSubmit*", "*WaitIdle", "AcquireNextTexture", "QueuePresent", "WaitForPresent"
-    OUT_OF_DATE             = -2,   // VK: swap chain is out of date, can be triggered if "features.resizableSwapChain" is not supported
-    INVALID_SDK             = -1,   // D3D: some interfaces are missing (potential reasons: unable to load "D3D12Core.dll", version or SDK mismatch)
+    OUT_OF_DATE             = -2,   // VK: swap chain is out of date, can be triggered if "features.resizableSwapChain" is not supported; D3D12: shader cache is stale
+    INVALID_SDK             = -1,   // D3D12: some interfaces are missing (potential reasons: unable to load "D3D12Core.dll", version or SDK mismatch, developer mode is not enabled)
 
     // All good
     SUCCESS                 = 0,
@@ -169,6 +172,16 @@ NriStruct(SampleLocation) {
     int8_t x, y; // [-8; 7]
 };
 
+NriStruct(BufferOffset) {
+    NriPtr(Buffer) buffer;
+    uint64_t offset;
+};
+
+NriStruct(DataSize) {
+    const void* data;
+    uint64_t size;
+};
+
 #pragma endregion
 
 //============================================================================================================================================================================================
@@ -203,7 +216,7 @@ NriEnum(Format, uint8_t,                // |      FormatSupportBits      |
     // Plain: 8 bits per channel
     R8_UNORM,                           // + + . + . + + + + + + + . + + +
     R8_SNORM,                           // + + . + . + + + + + + + . + + +
-    R8_UINT,                            // + + . + . . + + + . + + . + + +  // SHADING_RATE compatible, see NRI_SHADING_RATE macro
+    R8_UINT,                            // + + . + . . + + + . + + . + + +  // "SHADING_RATE_ATTACHMENT" compatible, see "NRI_SHADING_RATE" macro
     R8_SINT,                            // + + . + . . + + + . + + . + + +
 
     RG8_UNORM,                          // + + . + . + + + + + + + . + + +  // "AccelerationStructure" compatible (requires "tiers.rayTracing >= 2")
@@ -267,7 +280,16 @@ NriEnum(Format, uint8_t,                // |      FormatSupportBits      |
     R11_G11_B10_UFLOAT,                 // + + . + . + + + + + + + . + + +
     R9_G9_B9_E5_UFLOAT,                 // + . . . . . . . . . . . . . . .
 
-    // Block-compressed
+    // YUV 4:2:0 video formats
+    NV12_UNORM,                         // + . . . . . . . . . . . . . . .
+    P010_UNORM,                         // + . . . . . . . . . . . . . . .
+    P016_UNORM,                         // + . . . . . . . . . . . . . . .
+
+    // Block-compressed (requires "features.textureCompressionBC")
+    // https://learn.microsoft.com/en-us/windows/win32/direct3d11/texture-block-compression-in-direct3d-11?source=recommendations
+    // https://registry.khronos.org/DataFormat/specs/1.4/dataformat.1.4.html#S3TC
+    // https://registry.khronos.org/DataFormat/specs/1.4/dataformat.1.4.html#RGTC
+    // https://registry.khronos.org/DataFormat/specs/1.4/dataformat.1.4.html#BPTC
     BC1_RGBA_UNORM,                     // + . . . . . . . . . . . . . . .
     BC1_RGBA_SRGB,                      // + . . . . . . . . . . . . . . .
     BC2_RGBA_UNORM,                     // + . . . . . . . . . . . . . . .
@@ -283,57 +305,112 @@ NriEnum(Format, uint8_t,                // |      FormatSupportBits      |
     BC7_RGBA_UNORM,                     // + . . . . . . . . . . . . . . .
     BC7_RGBA_SRGB,                      // + . . . . . . . . . . . . . . .
 
-    // Depth-stencil
-    D16_UNORM,                          // . . . . + . + + + . . . . . . .
-    D24_UNORM_S8_UINT,                  // . . . . + . + + + . . . . . . .
-    D32_SFLOAT,                         // . . . . + . + + + . . . . . . .
-    D32_SFLOAT_S8_UINT_X24,             // . . . . + . + + + . . . . . . .
+    // Block-compressed: Ericsson Texture Compression (requires "features.textureCompressionETC2")
+    // https://registry.khronos.org/DataFormat/specs/1.4/dataformat.1.4.html#ETC2
+    ETC2_RGB8_UNORM,                    // + . . . . . . . . . . . . . . .
+    ETC2_RGB8_SRGB,                     // + . . . . . . . . . . . . . . .
+    ETC2_RGB8_A1_UNORM,                 // + . . . . . . . . . . . . . . .
+    ETC2_RGB8_A1_SRGB,                  // + . . . . . . . . . . . . . . .
+    ETC2_RGB8_A8_UNORM,                 // + . . . . . . . . . . . . . . .
+    ETC2_RGB8_A8_SRGB,                  // + . . . . . . . . . . . . . . .
+    ETC2_R11_UNORM,                     // + . . . . . . . . . . . . . . .
+    ETC2_R11_SNORM,                     // + . . . . . . . . . . . . . . .
+    ETC2_R11_G11_UNORM,                 // + . . . . . . . . . . . . . . .
+    ETC2_R11_G11_SNORM,                 // + . . . . . . . . . . . . . . .
 
-    // Depth-stencil (as a shader resource view)
-    R24_UNORM_X8,       // .x - depth   // + . . . . . . . . . . . . . . .
-    X24_G8_UINT,        // .y - stencil // + . . . . . . . . . . . . . . .
-    R32_SFLOAT_X8_X24,  // .x - depth   // + . . . . . . . . . . . . . . .
-    X32_G8_UINT_X24     // .y - stencil // + . . . . . . . . . . . . . . .
+    // Block-compressed: Adaptive Scalable Texture Compression (requires "features.textureCompressionASTC")
+    // https://registry.khronos.org/DataFormat/specs/1.4/dataformat.1.4.html#ASTC
+    ASTC_4X4_UNORM,                     // + . . . . . . . . . . . . . . .
+    ASTC_4X4_SRGB,                      // + . . . . . . . . . . . . . . .
+    ASTC_5X4_UNORM,                     // + . . . . . . . . . . . . . . .
+    ASTC_5X4_SRGB,                      // + . . . . . . . . . . . . . . .
+    ASTC_5X5_UNORM,                     // + . . . . . . . . . . . . . . .
+    ASTC_5X5_SRGB,                      // + . . . . . . . . . . . . . . .
+    ASTC_6X5_UNORM,                     // + . . . . . . . . . . . . . . .
+    ASTC_6X5_SRGB,                      // + . . . . . . . . . . . . . . .
+    ASTC_6X6_UNORM,                     // + . . . . . . . . . . . . . . .
+    ASTC_6X6_SRGB,                      // + . . . . . . . . . . . . . . .
+    ASTC_8X5_UNORM,                     // + . . . . . . . . . . . . . . .
+    ASTC_8X5_SRGB,                      // + . . . . . . . . . . . . . . .
+    ASTC_8X6_UNORM,                     // + . . . . . . . . . . . . . . .
+    ASTC_8X6_SRGB,                      // + . . . . . . . . . . . . . . .
+    ASTC_8X8_UNORM,                     // + . . . . . . . . . . . . . . .
+    ASTC_8X8_SRGB,                      // + . . . . . . . . . . . . . . .
+    ASTC_10X5_UNORM,                    // + . . . . . . . . . . . . . . .
+    ASTC_10X5_SRGB,                     // + . . . . . . . . . . . . . . .
+    ASTC_10X6_UNORM,                    // + . . . . . . . . . . . . . . .
+    ASTC_10X6_SRGB,                     // + . . . . . . . . . . . . . . .
+    ASTC_10X8_UNORM,                    // + . . . . . . . . . . . . . . .
+    ASTC_10X8_SRGB,                     // + . . . . . . . . . . . . . . .
+    ASTC_10X10_UNORM,                   // + . . . . . . . . . . . . . . .
+    ASTC_10X10_SRGB,                    // + . . . . . . . . . . . . . . .
+    ASTC_12X10_UNORM,                   // + . . . . . . . . . . . . . . .
+    ASTC_12X10_SRGB,                    // + . . . . . . . . . . . . . . .
+    ASTC_12X12_UNORM,                   // + . . . . . . . . . . . . . . .
+    ASTC_12X12_SRGB,                    // + . . . . . . . . . . . . . . .
+
+    // Depth
+    D16_UNORM,                          // + . . . + . + + + . . . . . . .
+    D32_SFLOAT,                         // + . . . + . + + + . . . . . . .
+
+    // Depth-stencil
+    D24_UNORM_S8_UINT,                  // + . . . + . + + + . . . . . . .
+    D32_SFLOAT_S8_UINT                  // + . . . + . + + + . . . . . . .
 );
 
 // https://learn.microsoft.com/en-us/windows/win32/direct3d12/subresources#plane-slice
 // https://docs.vulkan.org/refpages/latest/refpages/source/VkImageAspectFlagBits.html
 NriBits(PlaneBits, uint8_t,
-    ALL                             = 0,
+    ALL                             = 0,            // lazy default
+    NONE                            = NriBit(7),    // no accessible planes (needed for a read-only depth-stencil attachment)
+
     COLOR                           = NriBit(0),    // indicates "color" plane (same as "ALL" for color formats)
 
     // D3D11: can't be addressed individually in "copy" and "resolve" operations
     DEPTH                           = NriBit(1),    // indicates "depth" plane (same as "ALL" for depth-only formats)
-    STENCIL                         = NriBit(2)     // indicates "stencil" plane in depth-stencil formats
+    STENCIL                         = NriBit(2),    // indicates "stencil" plane in depth-stencil formats
+
+    // For multi-planar YUV formats
+    PLANE_0                         = NriBit(3),
+    PLANE_1                         = NriBit(4),
+    PLANE_2                         = NriBit(5),
+
+    // Aliases
+    PLANE_Y                         = NriMember(PlaneBits, PLANE_0),
+    PLANE_UV                        = NriMember(PlaneBits, PLANE_1)
 );
 
 // A bit represents a feature, supported by a format
 // https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ns-d3d12-d3d12_feature_data_format_support
 // https://docs.vulkan.org/refpages/latest/refpages/source/VkFormatFeatureFlagBits2.html
-NriBits(FormatSupportBits, uint16_t,
-    UNSUPPORTED                     = 0,
+// WGPU: typed buffer views are unsupported; storage textures cannot be multisampled
+NriBits(FormatSupportBits, uint32_t,
+    UNSUPPORTED                     = 0,            // format is unsupported
 
     // Texture
-    TEXTURE                         = NriBit(0),
-    STORAGE_TEXTURE                 = NriBit(1),
-    STORAGE_TEXTURE_ATOMICS         = NriBit(2),    // other than Load / Store
-    COLOR_ATTACHMENT                = NriBit(3),
-    DEPTH_STENCIL_ATTACHMENT        = NriBit(4),
-    BLEND                           = NriBit(5),
-    MULTISAMPLE_2X                  = NriBit(6),
-    MULTISAMPLE_4X                  = NriBit(7),
-    MULTISAMPLE_8X                  = NriBit(8),
-    MULTISAMPLE_RESOLVE             = NriBit(9),
+    TEXTURE                         = NriBit(0),    // sampled texture view
+    STORAGE_TEXTURE                 = NriBit(1),    // storage texture view
+    STORAGE_TEXTURE_ATOMICS         = NriBit(2),    // storage texture atomics other than Load / Store
+    COLOR_ATTACHMENT                = NriBit(3),    // color attachment view
+    DEPTH_STENCIL_ATTACHMENT        = NriBit(4),    // depth-stencil attachment view
+    BLEND                           = NriBit(5),    // color attachment blending
+    MULTISAMPLE_2X                  = NriBit(6),    // 2x multisampled texture
+    MULTISAMPLE_4X                  = NriBit(7),    // 4x multisampled texture
+    MULTISAMPLE_8X                  = NriBit(8),    // 8x multisampled texture
+    MULTISAMPLE_RESOLVE             = NriBit(9),    // resolve source/destination
 
     // Buffer
-    BUFFER                          = NriBit(10),
-    STORAGE_BUFFER                  = NriBit(11),
-    STORAGE_BUFFER_ATOMICS          = NriBit(12),   // other than Load / Store
-    VERTEX_BUFFER                   = NriBit(13),
+    BUFFER                          = NriBit(10),   // typed buffer view
+    STORAGE_BUFFER                  = NriBit(11),   // typed storage buffer view
+    STORAGE_BUFFER_ATOMICS          = NriBit(12),   // typed storage buffer atomics other than Load / Store
+    VERTEX_BUFFER                   = NriBit(13),   // vertex buffer attribute
 
     // Texture / buffer
-    STORAGE_READ_WITHOUT_FORMAT     = NriBit(14),
-    STORAGE_WRITE_WITHOUT_FORMAT    = NriBit(15)
+    STORAGE_READ_WITHOUT_FORMAT     = NriBit(14),   // storage read with unknown format
+    STORAGE_WRITE_WITHOUT_FORMAT    = NriBit(15),   // storage write with unknown format
+
+    // Host (generally supported for non-depth/stencil formats with "TEXTURE" bit support)
+    HOST_COPY                       = NriBit(16)    // synchronous host copies are supported
 );
 
 #pragma endregion
@@ -376,27 +453,35 @@ NriBits(StageBits, uint32_t,
     FRAGMENT_SHADER                 = NriBit(7),    //    Fragment (pixel) shader                         X
     DEPTH_STENCIL_ATTACHMENT        = NriBit(8),    //    Depth-stencil R/W operations
     COLOR_ATTACHMENT                = NriBit(9),    //    Color R/W operations
+    SHADING_RATE_ATTACHMENT         = NriBit(10),   //    Shading rate attachment R
 
     // Compute                                      // Invoked by "CmdDispatch*" (not Rays)
-    COMPUTE_SHADER                  = NriBit(10),   //    Compute shader                                  X (required within COMPUTE bind point)
+    COMPUTE_SHADER                  = NriBit(11),   //    Compute shader                                  X (required within COMPUTE bind point)
 
     // Ray tracing                                  // Invoked by "CmdDispatchRays*"
-    RAYGEN_SHADER                   = NriBit(11),   //    Ray generation shader                           X (required within RAY_TRACING bind point)
-    MISS_SHADER                     = NriBit(12),   //    Miss shader                                     X
-    INTERSECTION_SHADER             = NriBit(13),   //    Intersection shader                             X
-    CLOSEST_HIT_SHADER              = NriBit(14),   //    Closest hit shader                              X
-    ANY_HIT_SHADER                  = NriBit(15),   //    Any hit shader                                  X
-    CALLABLE_SHADER                 = NriBit(16),   //    Callable shader                                 X
-    ACCELERATION_STRUCTURE          = NriBit(17),   // Invoked by "Cmd*AccelerationStructure*" commands
-    MICROMAP                        = NriBit(18),   // Invoked by "Cmd*Micromap*" commands
+    RAYGEN_SHADER                   = NriBit(12),   //    Ray generation shader                           X (required within RAY_TRACING bind point)
+    MISS_SHADER                     = NriBit(13),   //    Miss shader                                     X
+    INTERSECTION_SHADER             = NriBit(14),   //    Intersection shader                             X
+    CLOSEST_HIT_SHADER              = NriBit(15),   //    Closest hit shader                              X
+    ANY_HIT_SHADER                  = NriBit(16),   //    Any hit shader                                  X
+    CALLABLE_SHADER                 = NriBit(17),   //    Callable shader                                 X
+    ACCELERATION_STRUCTURE          = NriBit(18),   // Invoked by "Cmd*AccelerationStructure*" commands
+    MICROMAP                        = NriBit(19),   // Invoked by "Cmd*Micromap*" commands
 
     // Other
-    COPY                            = NriBit(19),   // Invoked by "CmdCopy*", "CmdUpload*" and "CmdReadback*"
-    RESOLVE                         = NriBit(20),   // Invoked by "CmdResolveTexture"
-    CLEAR_STORAGE                   = NriBit(21),   // Invoked by "CmdClearStorage"
+    COPY                            = NriBit(20),   // Invoked by "CmdCopy*", "CmdUpload*" and "CmdReadback*"
+    RESOLVE                         = NriBit(21),   // Invoked by "CmdResolveTexture"
+    CLEAR_STORAGE                   = NriBit(22),   // Invoked by "CmdClearStorage"
 
     // Modifiers
-    INDIRECT                        = NriBit(22),   // Invoked by "Indirect" commands (used in addition to other bits)
+    INDIRECT                        = NriBit(23),   // Invoked by "Indirect" commands (used in addition to other bits)
+
+    // Host
+    HOST                            = NriBit(24),   // Invoked by "UploadHostMemoryToTexture" and "ReadbackTextureToHostMemory"
+
+    // Video
+    VIDEO_DECODE                    = NriBit(25),   // Invoked by "CmdDecodeVideo"
+    VIDEO_ENCODE                    = NriBit(26),   // Invoked by "CmdEncodeVideo"
 
     // Umbrella stages
     TESSELLATION_SHADERS            = NriMember(StageBits, TESS_CONTROL_SHADER)
@@ -426,6 +511,7 @@ NriBits(StageBits, uint32_t,
                                     | NriMember(StageBits, GRAPHICS_SHADERS)
                                     | NriMember(StageBits, DEPTH_STENCIL_ATTACHMENT)
                                     | NriMember(StageBits, COLOR_ATTACHMENT)
+                                    | NriMember(StageBits, SHADING_RATE_ATTACHMENT)
 );
 
 // https://docs.vulkan.org/refpages/latest/refpages/source/VkAccessFlagBits2.html
@@ -445,7 +531,7 @@ NriBits(AccessBits, uint32_t,
     COLOR_ATTACHMENT_WRITE          = NriBit(6),    //  W       COLOR_ATTACHMENT
     DEPTH_STENCIL_ATTACHMENT_READ   = NriBit(7),    // R        DEPTH_STENCIL_ATTACHMENT
     DEPTH_STENCIL_ATTACHMENT_WRITE  = NriBit(8),    //  W       DEPTH_STENCIL_ATTACHMENT
-    SHADING_RATE_ATTACHMENT         = NriBit(9),    // R        FRAGMENT_SHADER
+    SHADING_RATE_ATTACHMENT         = NriBit(9),    // R        SHADING_RATE_ATTACHMENT
     INPUT_ATTACHMENT                = NriBit(10),   // R        FRAGMENT_SHADER
 
     // Acceleration structure
@@ -472,6 +558,16 @@ NriBits(AccessBits, uint32_t,
     // Clear storage
     CLEAR_STORAGE                   = NriBit(22),   //  W       CLEAR_STORAGE
 
+    // Host
+    HOST_READ                       = NriBit(23),   // R        HOST
+    HOST_WRITE                      = NriBit(24),   //  W       HOST
+
+    // Video
+    VIDEO_DECODE_READ               = NriBit(25),   // R        VIDEO_DECODE
+    VIDEO_DECODE_WRITE              = NriBit(26),   //  W       VIDEO_DECODE
+    VIDEO_ENCODE_READ               = NriBit(27),   // R        VIDEO_ENCODE
+    VIDEO_ENCODE_WRITE              = NriBit(28),   //  W       VIDEO_ENCODE
+
     // Umbrella access
     COLOR_ATTACHMENT                = NriMember(AccessBits, COLOR_ATTACHMENT_READ)
                                     | NriMember(AccessBits, COLOR_ATTACHMENT_WRITE),
@@ -483,7 +579,13 @@ NriBits(AccessBits, uint32_t,
                                     | NriMember(AccessBits, ACCELERATION_STRUCTURE_WRITE),
 
     MICROMAP                        = NriMember(AccessBits, MICROMAP_READ)
-                                    | NriMember(AccessBits, MICROMAP_WRITE)
+                                    | NriMember(AccessBits, MICROMAP_WRITE),
+
+    VIDEO_DECODE                    = NriMember(AccessBits, VIDEO_DECODE_READ)
+                                    | NriMember(AccessBits, VIDEO_DECODE_WRITE),
+
+    VIDEO_ENCODE                    = NriMember(AccessBits, VIDEO_ENCODE_READ)
+                                    | NriMember(AccessBits, VIDEO_ENCODE_WRITE)
 );
 
 // "Layout" is ignored if "features.enhancedBarriers" is not supported
@@ -498,9 +600,9 @@ NriEnum(Layout, uint8_t,            // Compatible "AccessBits":
     // Attachment
     COLOR_ATTACHMENT,                   // COLOR_ATTACHMENT_READ/WRITE
     DEPTH_STENCIL_ATTACHMENT,           // DEPTH_STENCIL_ATTACHMENT_READ/WRITE
-    DEPTH_READONLY_STENCIL_ATTACHMENT,  // DEPTH_STENCIL_ATTACHMENT_READ/WRITE, SHADER_RESOURCE (readonlyPlanes = "DEPTH")
-    DEPTH_ATTACHMENT_STENCIL_READONLY,  // DEPTH_STENCIL_ATTACHMENT_READ/WRITE, SHADER_RESOURCE (readonlyPlanes = "STENCIL")
-    DEPTH_STENCIL_READONLY,             // DEPTH_STENCIL_ATTACHMENT_READ, SHADER_RESOURCE (readonlyPlanes = "DEPTH|STENCIL")
+    DEPTH_READONLY_STENCIL_ATTACHMENT,  // DEPTH_STENCIL_ATTACHMENT_READ/WRITE (accessible "planes" = "STENCIL"), SHADER_RESOURCE (accessible "planes" = "DEPTH")
+    DEPTH_ATTACHMENT_STENCIL_READONLY,  // DEPTH_STENCIL_ATTACHMENT_READ/WRITE (accessible "planes" = "DEPTH"), SHADER_RESOURCE (accessible "planes" = "STENCIL")
+    DEPTH_STENCIL_READONLY,             // DEPTH_STENCIL_ATTACHMENT_READ  (accessible "planes" = "NONE")
     SHADING_RATE_ATTACHMENT,            // SHADING_RATE_ATTACHMENT
     INPUT_ATTACHMENT,                   // COLOR_ATTACHMENT, INPUT_ATTACHMENT
 
@@ -514,7 +616,13 @@ NriEnum(Layout, uint8_t,            // Compatible "AccessBits":
 
     // Resolve
     RESOLVE_SOURCE,                     // RESOLVE_SOURCE
-    RESOLVE_DESTINATION                 // RESOLVE_DESTINATION
+    RESOLVE_DESTINATION,                // RESOLVE_DESTINATION
+
+    // Video
+    VIDEO_DECODE_DST,                   // VIDEO_DECODE_WRITE
+    VIDEO_DECODE_DPB,                   // VIDEO_DECODE_READ/WRITE
+    VIDEO_ENCODE_SRC,                   // VIDEO_ENCODE_READ
+    VIDEO_ENCODE_DPB                    // VIDEO_ENCODE_READ/WRITE
 );
 
 NriStruct(AccessStage) {
@@ -556,6 +664,7 @@ NriStruct(TextureBarrierDesc) {
 };
 
 // Using "CmdBarrier" inside a rendering pass is allowed, but only for "Layout::INPUT_ATTACHMENT" access transitions
+// D3D12 filters out "transitioning to the same state" barriers if "features.enhancedBarriers" is not supported
 NriStruct(BarrierDesc) {
     const NriPtr(GlobalBarrierDesc) globals;
     uint32_t globalNum;
@@ -574,9 +683,9 @@ NriStruct(BarrierDesc) {
 // https://docs.vulkan.org/refpages/latest/refpages/source/VkImageType.html
 // https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ne-d3d12-d3d12_resource_dimension
 NriEnum(TextureType, uint8_t,
-    TEXTURE_1D,
+    TEXTURE_1D, // WGPU: arrays and mipmaps are unsupported
     TEXTURE_2D,
-    TEXTURE_3D
+    TEXTURE_3D  // arrays are unsupported
 );
 
 // NRI tries to ease your life and avoid using "queue ownership transfers" (see "TextureBarrierDesc").
@@ -595,14 +704,18 @@ NriEnum(SharingMode, uint8_t,
 
 // https://docs.vulkan.org/refpages/latest/refpages/source/VkImageUsageFlagBits.html
 // https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ne-d3d12-d3d12_resource_flags
-NriBits(TextureUsageBits, uint8_t,                  // Min compatible access:                   Usage:
+NriBits(TextureUsageBits, uint16_t,                 // Min compatible access:                   Usage:
     NONE                                = 0,
     SHADER_RESOURCE                     = NriBit(0),    // SHADER_RESOURCE                          Read-only shader resource view (SRV)
     SHADER_RESOURCE_STORAGE             = NriBit(1),    // SHADER_RESOURCE_STORAGE                  Read/write shader resource view (UAV)
     COLOR_ATTACHMENT                    = NriBit(2),    // COLOR_ATTACHMENT                         Color attachment (render target)
     DEPTH_STENCIL_ATTACHMENT            = NriBit(3),    // DEPTH_STENCIL_ATTACHMENT_READ/WRITE      Depth-stencil attachment (depth-stencil target)
     SHADING_RATE_ATTACHMENT             = NriBit(4),    // SHADING_RATE_ATTACHMENT                  Shading rate attachment (source)
-    INPUT_ATTACHMENT                    = NriBit(5)     // INPUT_ATTACHMENT                         Subpass input (read on-chip tile cache)
+    INPUT_ATTACHMENT                    = NriBit(5),    // INPUT_ATTACHMENT                         Subpass input (read on-chip tile cache)
+    HOST_TRANSFER                       = NriBit(6),    // HOST_READ/HOST_WRITE                     Synchronous copy between texture and host memory
+    VIDEO_DECODE                        = NriBit(7),    // VIDEO_DECODE                             Video decode output / DPB picture
+    VIDEO_ENCODE                        = NriBit(8),    // VIDEO_ENCODE                             Video encode input / DPB picture
+    VIDEO_REFERENCE_ONLY                = NriBit(9)     // VIDEO_*                                  Video DPB/reference-only allocation
 );
 
 // https://docs.vulkan.org/refpages/latest/refpages/source/VkBufferUsageFlagBits.html
@@ -610,16 +723,25 @@ NriBits(BufferUsageBits, uint16_t,                  // Min compatible access:   
     NONE                                = 0,
     SHADER_RESOURCE                     = NriBit(0),    // SHADER_RESOURCE                          Read-only shader resource view (SRV)
     SHADER_RESOURCE_STORAGE             = NriBit(1),    // SHADER_RESOURCE_STORAGE                  Read/write shader resource view (UAV)
-    VERTEX_BUFFER                       = NriBit(2),    // VERTEX_BUFFER                            Vertex buffer
-    INDEX_BUFFER                        = NriBit(3),    // INDEX_BUFFER                             Index buffer
-    CONSTANT_BUFFER                     = NriBit(4),    // CONSTANT_BUFFER                          Constant buffer (D3D11: can't be combined with other usages)
-    ARGUMENT_BUFFER                     = NriBit(5),    // ARGUMENT_BUFFER                          Argument buffer in "Indirect" commands
-    SCRATCH_BUFFER                      = NriBit(6),    // SCRATCH_BUFFER                           Scratch buffer in "CmdBuild*" commands
+    VERTEX                              = NriBit(2),    // VERTEX_BUFFER                            Vertex buffer
+    INDEX                               = NriBit(3),    // INDEX_BUFFER                             Index buffer
+    CONSTANT                            = NriBit(4),    // CONSTANT_BUFFER                          Constant buffer (D3D11: can't be combined with other usages)
+    ARGUMENT                            = NriBit(5),    // ARGUMENT_BUFFER                          Argument buffer in "Indirect" commands
+    SCRATCH                             = NriBit(6),    // SCRATCH_BUFFER                           Scratch buffer in "CmdBuild*" commands
     SHADER_BINDING_TABLE                = NriBit(7),    // SHADER_BINDING_TABLE                     Shader binding table (SBT) in "CmdDispatchRays*" commands
     ACCELERATION_STRUCTURE_BUILD_INPUT  = NriBit(8),    // SHADER_RESOURCE                          Read-only input in "CmdBuildAccelerationStructures" command
     ACCELERATION_STRUCTURE_STORAGE      = NriBit(9),    // ACCELERATION_STRUCTURE_READ/WRITE        (INTERNAL) acceleration structure storage
     MICROMAP_BUILD_INPUT                = NriBit(10),   // SHADER_RESOURCE                          Read-only input in "CmdBuildMicromaps" command
-    MICROMAP_STORAGE                    = NriBit(11)    // MICROMAP_READ/WRITE                      (INTERNAL) micromap storage
+    MICROMAP_STORAGE                    = NriBit(11),   // MICROMAP_READ/WRITE                      (INTERNAL) micromap storage
+    VIDEO_DECODE                        = NriBit(12),   // VIDEO_DECODE                             Video decode bitstream input
+    VIDEO_ENCODE                        = NriBit(13)    // VIDEO_ENCODE                             Video encode bitstream output
+);
+
+NriEnum(VideoCodec, uint8_t,
+    NONE,
+    H264,
+    H265,
+    AV1
 );
 
 NriStruct(TextureDesc) {
@@ -633,20 +755,19 @@ NriStruct(TextureDesc) {
     NriOptional Nri(Dim_t) layerNum;
     NriOptional Nri(Sample_t) sampleNum;
     NriOptional Nri(SharingMode) sharingMode;
+    NriOptional Nri(VideoCodec) videoCodec;             // VK: required for video textures
     NriOptional Nri(ClearValue) optimizedClearValue;    // D3D12: not needed on desktop, since any HW can track many clear values
 };
 
 // - VK: buffers are always created with sharing mode "CONCURRENT" to match D3D12 spec
-// - "structureStride" values:
-//   - 0  - allows only "typed" views
-//   - 4  - allows "typed", "byte address" and "structured" views
-//          D3D11: allows to create multiple "structured" views for a single resource, disobeying the spec
-//   - >4 - allows only "structured" views
-//          D3D11: locks this buffer to a single "structured" layout
+// - D3D11: "structureStride != 0" locks this buffer to a single "STRUCTURED" layout, unless "byteAddress" is set to "true"
+// - D3D11: "byteAddress = true" allows to create multiple "STRUCTURED" views for a single resource by treating a "STRUCTURED" view as "BYTE_ADDRESS" (spec violation)
+// - WGPU: typed buffer views are unsupported (i.e. "structureStride = 0" and "byteAddress = false")
 NriStruct(BufferDesc) {
     uint64_t size;
-    uint32_t structureStride;
+    uint32_t structureStride;   // enable "STRUCTURED" views
     Nri(BufferUsageBits) usage;
+    bool byteAddress;           // enable "BYTE_ADDRESS" views
 };
 
 #pragma endregion
@@ -768,6 +889,8 @@ NriEnum(AddressMode, uint8_t,
     REPEAT,
     MIRRORED_REPEAT,
     CLAMP_TO_EDGE,
+
+    // WGPU: unsupported
     CLAMP_TO_BORDER,
     MIRROR_CLAMP_TO_EDGE
 );
@@ -820,7 +943,7 @@ NriStruct(TextureViewDesc) {
     Nri(Dim_t) layerNum;                    // can be "REMAINING"
     Nri(Dim_t) sliceOffset;
     Nri(Dim_t) sliceNum;                    // can be "REMAINING"
-    Nri(PlaneBits) readonlyPlanes;          // "DEPTH" and/or "STENCIL"
+    Nri(PlaneBits) planes;                  // accessible planes (missing planes for a "DEPTH_STENCIL_ATTACHMENT" are considered read-only)
     Nri(ComponentMapping) components;
 };
 
@@ -829,8 +952,8 @@ NriStruct(BufferViewDesc) {
     Nri(BufferView) type;
     uint64_t offset;                        // expects "memoryAlignment.bufferShaderResourceOffset" for shader resources
     uint64_t size;                          // can be "WHOLE_SIZE"
-    NriOptional Nri(Format) format;         // needed for typed views, i.e. "BUFFER" and "BUFFER_STORAGE"
-    NriOptional uint32_t structureStride;   // needed for structured views, i.e. "STRUCTURED_BUFFER" and "STRUCTURED_BUFFER_STORAGE" (= "BufferDesc::structureStride", if not provided)
+    NriOptional Nri(Format) format;         // needed for typed views, i.e. "BUFFER" and "STORAGE_BUFFER"
+    NriOptional uint32_t structureStride;   // needed for structured views, i.e. "STRUCTURED_BUFFER" and "STORAGE_STRUCTURED_BUFFER" (= "BufferDesc::structureStride", if not provided)
 };
 
 NriStruct(AddressModes) {
@@ -852,7 +975,7 @@ NriStruct(SamplerDesc) {
     float mipMax;
     Nri(AddressModes) addressModes;
     Nri(CompareOp) compareOp;
-    Nri(Color) borderColor;
+    Nri(Color) borderColor;       // used only with "AddressMode::CLAMP_TO_BORDER"
     bool isInteger;
     bool unnormalizedCoordinates; // requires "shaderFeatures.unnormalizedCoordinates"
 };
@@ -874,17 +997,24 @@ NriEnum(BindPoint, uint8_t,
 NriBits(PipelineLayoutBits, uint8_t,
     NONE                                    = 0,
     IGNORE_GLOBAL_SPIRV_OFFSETS             = NriBit(0),    // VK: ignore "DeviceCreationDesc::vkBindingOffsets"
-    ENABLE_DRAW_PARAMETERS_EMULATION        = NriBit(1),    // enable draw parameters emulation, requires "shaderFeatures.drawParametersEmulation"
+    ENABLE_DRAW_PARAMETERS_EMULATION        = NriBit(1),    // D3D12: enable draw parameters emulation, requires "shaderFeatures.drawParameters"
+    ENABLE_DRAW_INDEX_EMULATION             = NriBit(2),    // D3D12: enable draw index emulation, requires "shaderFeatures.drawIndex"
 
-    // https://github.com/Microsoft/DirectXShaderCompiler/blob/main/docs/SPIR-V.rst#resourcedescriptorheaps--samplerdescriptorheaps
-    // Default VK bindings can be changed via "-fvk-bind-sampler-heap" and "-fvk-bind-resource-heap" DXC options
-    SAMPLER_HEAP_DIRECTLY_INDEXED           = NriBit(2),    // requires "shaderModel >= 66"
-    RESOURCE_HEAP_DIRECTLY_INDEXED          = NriBit(3)     // requires "shaderModel >= 66"
+    // Direct indexing has two modes:
+    // - "descriptor pool":
+    //     "MUTABLE" descriptors + "DIRECTLY_INDEXED" flags + up to two ranges in a set describing resource and sampler "virtual heaps" in a descriptor pool
+    //     https://github.com/Microsoft/DirectXShaderCompiler/blob/main/docs/SPIR-V.rst#resourcedescriptorheaps--samplerdescriptorheaps
+    //     Default VK bindings can be changed via "-fvk-bind-sampler-heap" and "-fvk-bind-resource-heap" DXC options
+    // - "descriptor heap":
+    //     NRIDescriptorHeap functionality (requires "features.descriptorHeap") + no descriptor sets + at least one "DIRECTLY_INDEXED" flag
+    SAMPLER_HEAP_DIRECTLY_INDEXED           = NriBit(3),    // requires "shaderModel >= 66"
+    RESOURCE_HEAP_DIRECTLY_INDEXED          = NriBit(4)     // requires "shaderModel >= 66"
 );
 
 NriBits(DescriptorPoolBits, uint8_t,
     NONE                                    = 0,
-    ALLOW_UPDATE_AFTER_SET                  = NriBit(0)     // allows "DescriptorSetBits::ALLOW_UPDATE_AFTER_SET"
+    ALLOW_UPDATE_AFTER_SET                  = NriBit(0),    // allows "DescriptorSetBits::ALLOW_UPDATE_AFTER_SET"
+    COPY_SOURCE                             = NriBit(1)     // allows allocated descriptor sets to be used as sources in "CopyDescriptorRanges"; such sets can't be bound
 );
 
 NriBits(DescriptorSetBits, uint8_t,
@@ -895,11 +1025,17 @@ NriBits(DescriptorSetBits, uint8_t,
 // https://docs.vulkan.org/refpages/latest/refpages/source/VkDescriptorBindingFlagBits.html
 NriBits(DescriptorRangeBits, uint8_t,
     NONE                                    = 0,
+
+    // Requires "tiers.resourceBinding >= 1"; descriptor validity is additionally restricted by the tier
     PARTIALLY_BOUND                         = NriBit(0),    // descriptors in range may not contain valid descriptors at the time the descriptors are consumed (but referenced descriptors must be valid)
     ARRAY                                   = NriBit(1),    // descriptors in range are organized into an array
+
+    // Requires "tiers.bindless >= 1" and "tiers.resourceBinding >= 2"
+    // VK: only one range per set, resolving to the highest binding number after applying "VKBindingOffsets"
     VARIABLE_SIZED_ARRAY                    = NriBit(2),    // descriptors in range are organized into a variable-sized array, which size is specified via "variableDescriptorNum" argument of "AllocateDescriptorSets" function
 
     // https://docs.vulkan.org/samples/latest/samples/extensions/descriptor_indexing/README.html#_update_after_bind_streaming_descriptors_concurrently
+    // WGPU: true "update after set" is unsupported because bind groups are immutable; "update + rebind" can work, but previously recorded commands can't be patched
     ALLOW_UPDATE_AFTER_SET                  = NriBit(3)     // descriptors in range can be updated after "CmdSetDescriptorSet" but before "QueueSubmit", also works as "DATA_VOLATILE"
 );
 
@@ -950,7 +1086,7 @@ NriStruct(DescriptorSetDesc) {
 // "PipelineLayout" consists of "DescriptorSet" descriptions and root parameters
 NriStruct(RootConstantDesc) {           // aka push constants block
     uint32_t registerIndex;
-    uint32_t size;
+    uint32_t size;                      // must be non-zero and a multiple of 4
     Nri(StageBits) shaderStages;
 };
 
@@ -1051,29 +1187,29 @@ NriStruct(CopyDescriptorRangeDesc) {
     uint32_t dstRangeIndex;
     uint32_t dstBaseDescriptor;
     // Source & count
-    const NriPtr(DescriptorSet) srcDescriptorSet;
+    const NriPtr(DescriptorSet) srcDescriptorSet; // must be allocated from a "DescriptorPool" with "DescriptorPoolBits::COPY_SOURCE"
     uint32_t srcRangeIndex;
     uint32_t srcBaseDescriptor;
-    uint32_t descriptorNum;         // can be "ALL" (source)
+    uint32_t descriptorNum;         // must be > 0
 };
 
 // Binding
 NriStruct(SetDescriptorSetDesc) {
-    uint32_t setIndex;
+    uint32_t setIndex;              // an index in "PipelineLayoutDesc::descriptorSets"
     const NriPtr(DescriptorSet) descriptorSet;
     NriOptional Nri(BindPoint) bindPoint;
 };
 
-NriStruct(SetRootConstantsDesc) {   // requires "pipelineLayoutRootConstantMaxSize > 0"
-    uint32_t rootConstantIndex;
+NriStruct(SetRootConstantsDesc) {   // requires "pipelineLayout.rootConstantMaxSize > 0", or "descriptorHeap.rootConstantMaxSize > 0" in "descriptor heap" mode
+    uint32_t rootConstantIndex;     // an index in "PipelineLayoutDesc::rootConstants"
     const void* data;
     uint32_t size;
     uint32_t offset;                // requires "features.rootConstantsOffset"
     NriOptional Nri(BindPoint) bindPoint;
 };
 
-NriStruct(SetRootDescriptorDesc) {  // requires "pipelineLayoutRootDescriptorMaxNum > 0"
-    uint32_t rootDescriptorIndex;
+NriStruct(SetRootDescriptorDesc) {  // requires "pipelineLayout.rootDescriptorMaxNum > 0", or "descriptorHeap.rootDescriptorMaxNum > 0" in "descriptor heap" mode
+    uint32_t rootDescriptorIndex;   // an index in "PipelineLayoutDesc::rootDescriptors"
     NriPtr(Descriptor) descriptor;
     uint32_t offset;                // a non-"CONSTANT_BUFFER" descriptor requires "features.nonConstantBufferRootDescriptorOffset"
     NriOptional Nri(BindPoint) bindPoint;
@@ -1111,6 +1247,8 @@ NriEnum(Topology, uint8_t,
     LINE_STRIP,
     TRIANGLE_LIST,
     TRIANGLE_STRIP,
+
+    // WGPU: unsupported
     LINE_LIST_WITH_ADJACENCY,
     LINE_STRIP_WITH_ADJACENCY,
     TRIANGLE_LIST_WITH_ADJACENCY,
@@ -1144,6 +1282,7 @@ NriStruct(VertexAttributeDesc) {
 NriStruct(VertexStreamDesc) {
     uint16_t bindingSlot;
     Nri(VertexStreamStepRate) stepRate;
+    NriOptional uint16_t stride; // fallback if "features.extendedDynamicState" is not supported
 };
 
 NriStruct(VertexInputDesc) {
@@ -1156,7 +1295,7 @@ NriStruct(VertexInputDesc) {
 NriStruct(VertexBufferDesc) {
     const NriPtr(Buffer) buffer;
     uint64_t offset;
-    uint32_t stride;
+    uint32_t stride; // requires "features.extendedDynamicState", ignored otherwise, use "VertexStreamDesc::stride" instead
 };
 
 #pragma endregion
@@ -1201,9 +1340,13 @@ NriEnum(ShadingRate, uint8_t,
 // B   Primitive shading rate   Attachment shading rate
 NriEnum(ShadingRateCombiner, uint8_t,
     KEEP,       // A
+
+    // Requires "tiers.shadingRate >= 2"
     REPLACE,    // B
     MIN,        // min(A, B)
     MAX,        // max(A, B)
+
+    // Requires "features.sumShadingRateCombiner"
     SUM         // (A + B) or (A * B)
 );
 
@@ -1247,8 +1390,8 @@ NriStruct(MultisampleDesc) {
 
 NriStruct(ShadingRateDesc) {
     Nri(ShadingRate) shadingRate;
-    Nri(ShadingRateCombiner) primitiveCombiner;     // requires "tiers.sampleLocations >= 2"
-    Nri(ShadingRateCombiner) attachmentCombiner;    // requires "tiers.sampleLocations >= 2"
+    Nri(ShadingRateCombiner) primitiveCombiner;
+    Nri(ShadingRateCombiner) attachmentCombiner;
 };
 
 #pragma endregion
@@ -1325,8 +1468,8 @@ NriEnum(BlendFactor, uint8_t,   // RGB                               ALPHA
     ONE_MINUS_DST_ALPHA,        // 1 - D.a                           1 - D.a
     CONSTANT_COLOR,             // C.r, C.g, C.b                     C.a
     ONE_MINUS_CONSTANT_COLOR,   // 1 - C.r, 1 - C.g, 1 - C.b         1 - C.a
-    CONSTANT_ALPHA,             // C.a                               C.a
-    ONE_MINUS_CONSTANT_ALPHA,   // 1 - C.a                           1 - C.a
+    CONSTANT_ALPHA,             // C.a                               C.a (for RGB requires "features.constantAlphaBlendFactors")
+    ONE_MINUS_CONSTANT_ALPHA,   // 1 - C.a                           1 - C.a (for RGB requires "features.constantAlphaBlendFactors")
     SRC_ALPHA_SATURATE,         // min(S0.a, 1 - D.a)                1
     SRC1_COLOR,                 // S1.r, S1.g, S1.b                  S1.a
     ONE_MINUS_SRC1_COLOR,       // 1 - S1.r, 1 - S1.g, 1 - S1.b      1 - S1.a
@@ -1428,10 +1571,25 @@ NriEnum(Robustness, uint8_t,
     D3D12           // moderate overhead, D3D12-level robust access (requires "VK_EXT_robustness2", soft fallback to VK mode)
 );
 
+NriBits(GraphicsPipelineBits, uint8_t,
+    NONE                = 0,
+    FAIL_ON_CACHE_MISS  = NriBit(0) // "CreateGraphicsPipeline" returns "FAILURE" if the pipeline is not found in the supplied cache (requires "features.pipelineCacheControl")
+);
+
+NriBits(ComputePipelineBits, uint8_t,
+    NONE                = 0,
+    FAIL_ON_CACHE_MISS  = NriBit(0) // "CreateComputePipeline" returns "FAILURE" if the pipeline is not found in the supplied cache (requires "features.pipelineCacheControl")
+);
+
+NriStruct(PipelineCacheDesc) {
+    NriOptional const void* data; // "data = NULL" means empty cache
+    NriOptional uint64_t size;
+};
+
 // It's recommended to use "NRI.hlsl" in the shader code
 NriStruct(ShaderDesc) {
     Nri(StageBits) stage;
-    const void* bytecode;
+    const void* bytecode; // see "features.shaderBytecodeXXX"
     uint64_t size;
     NriOptional const char* entryPointName;
 };
@@ -1445,13 +1603,17 @@ NriStruct(GraphicsPipelineDesc) {
     Nri(OutputMergerDesc) outputMerger;
     const NriPtr(ShaderDesc) shaders;
     uint32_t shaderNum;
-    NriOptional Nri(Robustness) robustness;
+    Nri(GraphicsPipelineBits) flags;
+    Nri(Robustness) robustness;
+    NriOptional const NriPtr(PipelineCache) cache; // uses a cached blob on a hit and stores the result on a miss
 };
 
 NriStruct(ComputePipelineDesc) {
     const NriPtr(PipelineLayout) pipelineLayout;
     Nri(ShaderDesc) shader;
-    NriOptional Nri(Robustness) robustness;
+    Nri(ComputePipelineBits) flags;
+    Nri(Robustness) robustness;
+    NriOptional const NriPtr(PipelineCache) cache; // uses a cached blob on a hit and stores the result on a miss
 };
 
 #pragma endregion
@@ -1466,15 +1628,16 @@ NriStruct(ComputePipelineDesc) {
 // https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ne-d3d12-d3d12_render_pass_beginning_access_type
 // https://docs.vulkan.org/refpages/latest/refpages/source/VkAttachmentLoadOp.html
 NriEnum(LoadOp, uint8_t,
-    LOAD,
-    CLEAR
+    LOAD,       // loads the existing attachment contents
+    CLEAR       // clears the attachment using "AttachmentDesc::clearValue"
 );
 
 // https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ne-d3d12-d3d12_render_pass_ending_access_type
 // https://docs.vulkan.org/refpages/latest/refpages/source/VkAttachmentStoreOp.html
 NriEnum(StoreOp, uint8_t,
-    STORE,
-    DISCARD
+    STORE,      // stores the attachment contents
+    DISCARD,    // makes the attachment contents undefined
+    NONE        // performs no store access if the attachment is not written, otherwise acts like "DISCARD"
 );
 
 // https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ne-d3d12-d3d12_resolve_mode
@@ -1491,9 +1654,13 @@ NriStruct(AttachmentDesc) {
     Nri(LoadOp) loadOp;
     Nri(StoreOp) storeOp;
     Nri(ResolveOp) resolveOp;
-    NriOptional NriPtr(Descriptor) resolveDst;          // must be valid during "CmdEndRendering"
+    NriOptional NriPtr(Descriptor) resolveDst;          // must be in "COLOR_ATTACHMENT" state and valid during "CmdEndRendering"
 };
 
+// If "VK_KHR_dynamic_rendering" is not supported:
+// - "VkRenderPass" is used under the hood
+// - input attachments must be transitioned to "Layout::INPUT_ATTACHMENT" in the same command buffer before "CmdBeginRendering"
+// - matching pipeline input attachment indices are inferred from these transitions
 NriStruct(RenderingDesc) {
     const NriPtr(AttachmentDesc) colors;
     uint32_t colorNum;
@@ -1512,10 +1679,10 @@ NriStruct(RenderingDesc) {
 // https://microsoft.github.io/DirectX-Specs/d3d/CountersAndQueries.html
 // https://docs.vulkan.org/refpages/latest/refpages/source/VkQueryType.html
 NriEnum(QueryType, uint8_t,
-    TIMESTAMP,                              // uint64_t
-    TIMESTAMP_COPY_QUEUE,                   // uint64_t (requires "features.copyQueueTimestamp"), same as "TIMESTAMP" but for a "COPY" queue
-    OCCLUSION,                              // uint64_t
-    PIPELINE_STATISTICS,                    // see "PipelineStatisticsDesc" (requires "features.pipelineStatistics")
+    TIMESTAMP,                              // uint64_t, requires "features.timestamp" (for "GRAPHICS" and "COMPUTE" queues), use only "CmdEndQuery" without "CmdBeginQuery"
+    TIMESTAMP_COPY_QUEUE,                   // uint64_t, requires "features.timestampCopyQueue" (for a "COPY" queue), use only "CmdEndQuery" without "CmdBeginQuery"
+    OCCLUSION,                              // uint64_t, requires "features.occlusion"
+    PIPELINE_STATISTICS,                    // see "PipelineStatisticsDesc", requires "features.pipelineStatistics"
     ACCELERATION_STRUCTURE_SIZE,            // uint64_t, requires "features.rayTracing"
     ACCELERATION_STRUCTURE_COMPACTED_SIZE,  // uint64_t, requires "features.rayTracing"
     MICROMAP_COMPACTED_SIZE                 // uint64_t, requires "features.micromap"
@@ -1577,10 +1744,13 @@ NriStruct(DrawIndexedDesc) {            // see NRI_FILL_DRAW_INDEXED_DESC
 };
 
 NriStruct(DispatchDesc) {
-    uint32_t x, y, z;
+    uint32_t workGroupNumX;
+    uint32_t workGroupNumY;
+    uint32_t workGroupNumZ;
 };
 
 // Modified draw command signatures, if the bound pipeline layout has "PipelineLayoutBits::ENABLE_DRAW_PARAMETERS_EMULATION"
+// "PipelineLayoutBits::ENABLE_DRAW_INDEX_EMULATION" does not change the command layout
 
 NriStruct(DrawBaseDesc) {               // see NRI_FILL_DRAW_DESC
     uint32_t shaderEmulatedBaseVertex;      // root constant
@@ -1626,6 +1796,22 @@ NriStruct(TextureDataLayoutDesc) {
     uint32_t slicePitch;    // must be a multiple of "uploadBufferTextureSliceAlignment"
 };
 
+NriStruct(UploadHostMemoryToTextureDesc) {
+    const void* srcData;
+    NriPtr(Texture) dstTexture;         // must be in "{AccessBits::HOST_WRITE, Layout::GENERAL, StageBits::HOST}"
+    Nri(TextureRegionDesc) dstRegion;
+    NriOptional uint32_t srcRowPitch;   // if rows are not tightly packed
+    NriOptional uint32_t srcSlicePitch; // if slices are not tightly packed
+};
+
+NriStruct(ReadbackTextureToHostMemoryDesc) {
+    NriPtr(Texture) srcTexture;         // must be in "{AccessBits::HOST_READ, Layout::GENERAL, StageBits::HOST}"
+    void* dstData;
+    Nri(TextureRegionDesc) srcRegion;
+    NriOptional uint32_t dstRowPitch;   // if rows are not tightly packed
+    NriOptional uint32_t dstSlicePitch; // if slices are not tightly packed
+};
+
 // Work submission
 NriStruct(FenceSubmitDesc) {
     NriPtr(Fence) fence;
@@ -1640,7 +1826,10 @@ NriStruct(QueueSubmitDesc) {
     uint32_t commandBufferNum;
     const NriPtr(FenceSubmitDesc) signalFences;
     uint32_t signalFenceNum;
-    NriOptional const NriPtr(SwapChain) swapChain; // required if "NRILowLatency" is enabled in the swap chain
+
+    // Required if "NRILowLatency" is enabled for the swap chain
+    NriOptional const NriPtr(SwapChain) swapChain;
+    NriOptional uint64_t presentId; // must match the value passed to "QueuePresent" for the frame
 };
 
 // Clear
@@ -1684,9 +1873,11 @@ NriEnum(Vendor, uint8_t,
 
 // https://docs.vulkan.org/refpages/latest/refpages/source/VkPhysicalDeviceType.html
 NriEnum(Architecture, uint8_t,
-    UNKNOWN,    // CPU device, virtual GPU or other
+    UNKNOWN,
+    SOFTWARE,   // CPU
+    VIRTUAL,    // remote desktop?
     INTEGRATED, // UMA
-    DESCRETE    // yes, please!
+    DISCRETE    // yes, please!
 );
 
 // https://docs.vulkan.org/refpages/latest/refpages/source/VkQueueFlagBits.html
@@ -1694,7 +1885,9 @@ NriEnum(Architecture, uint8_t,
 NriEnum(QueueType, uint8_t,
     GRAPHICS,
     COMPUTE,
-    COPY
+    COPY,
+    VIDEO_DECODE,
+    VIDEO_ENCODE
 );
 
 NriStruct(AdapterDesc) {
@@ -1703,10 +1896,14 @@ NriStruct(AdapterDesc) {
     uint64_t videoMemorySize;
     uint64_t sharedSystemMemorySize;
     uint32_t deviceId;
-    uint32_t queueNum[(uint32_t)NriScopedMember(QueueType, MAX_NUM)];
+    uint32_t driverVersion; // GAPI and OS dependent
+    uint32_t queueNum[(uint32_t)NriScopedMember(QueueType, MAX_NUM)]; // per type; queues of different types may alias the same native queue
     Nri(Vendor) vendor;
     Nri(Architecture) architecture;
+    Nri(GraphicsAPI) supportedGraphicsAPIs;
 };
+
+#define NriShaderModel(major, minor) (major * 100 + minor)
 
 // Feature support coverage: https://vulkan.gpuinfo.org/ and https://d3d12infodb.boolka.dev/
 NriStruct(DeviceDesc) {
@@ -1714,13 +1911,13 @@ NriStruct(DeviceDesc) {
     Nri(AdapterDesc) adapterDesc; // "queueNum" reflects available number of queues per "QueueType"
     Nri(GraphicsAPI) graphicsAPI;
     uint16_t nriVersion;
-    uint8_t shaderModel; // major * 10 + minor
+    uint16_t shaderModel; // see "NriShaderModel"
 
     // Viewport
     struct {
         uint32_t maxNum;
-        int16_t boundsMin;
-        int16_t boundsMax;
+        int32_t boundsMin;
+        int32_t boundsMax;
     } viewport;
 
     // Dimensions
@@ -1768,12 +1965,14 @@ NriStruct(DeviceDesc) {
         uint32_t micromapOffset;
     } memoryAlignment;
 
-    // Pipeline layout
-    // D3D12 only: rootConstantSize + descriptorSetNum * 4 + rootDescriptorNum * 8 <= 256 (see "FitPipelineLayoutSettingsIntoDeviceLimits")
+    // Pipeline layout (see "nriFitPipelineLayoutSettingsIntoDeviceLimits")
+    // D3D12 only: "rootConstantSize" + "descriptorSetNum" * 4 + "rootDescriptorNum" * 8 + "reservedSize" <= 256, where
+    // "reservedSize" is 8 bytes for "ENABLE_DRAW_PARAMETERS_EMULATION" and 4 bytes for "ENABLE_DRAW_INDEX_EMULATION"
     struct {
         uint32_t descriptorSetMaxNum;
         uint32_t rootConstantMaxSize;
         uint32_t rootDescriptorMaxNum;
+        uint32_t rootSamplerMaxNum;
     } pipelineLayout;
 
     // Descriptor set
@@ -1792,6 +1991,15 @@ NriStruct(DeviceDesc) {
             uint32_t storageTextureMaxNum;
         } updateAfterSet;
     } descriptorSet;
+
+    // Descriptor heap
+    struct {
+        uint32_t resourceMaxNum;
+        uint32_t samplerMaxNum;
+        uint32_t rootConstantMaxSize;
+        uint32_t rootDescriptorMaxNum;
+        uint32_t rootSamplerMaxNum;
+    } descriptorHeap;
 
     // Shader stages
     struct {
@@ -1932,6 +2140,7 @@ NriStruct(DeviceDesc) {
         uint8_t combinedClipAndCullDistanceMaxNum;
         uint8_t viewMaxNum;                         // multiview is supported if > 1
         uint8_t shadingRateAttachmentTileSize;      // square size
+        bool timestampCopyQueueResolveOnCopyQueue;  // if "true", "CmdCopyQueries" for "TIMESTAMP_COPY_QUEUE" requires a COPY queue, otherwise "GRAPHICS" or "COMPUTE"
     } other;
 
     // Tiers (0 - unsupported)
@@ -1962,11 +2171,15 @@ NriStruct(DeviceDesc) {
 
         // https://microsoft.github.io/DirectX-Specs/d3d/ResourceBinding.html#limitations-on-static-samplers
         // 0 - ALL descriptors in range must be valid by the time the command list executes
+        //       GPUs: rare
         // 1 - only "CONSTANT_BUFFER" and "STORAGE" descriptors in range must be valid
+        //       GPUs: NVIDIA GTX 6xx, 7xx, 9xx & 10xx series
         // 2 - only referenced descriptors must be valid
+        //       GPUs: NVIDIA GTX 16xx & RTX series, AMD R9 & RX series, Intel Arc & Skylake+
         uint8_t resourceBinding;
 
-        // 1 - unbound arrays with dynamic indexing
+        // Descriptor array indexing
+        // 1 - unbounded arrays with dynamic indexing
         // 2 - D3D12 dynamic resources: https://microsoft.github.io/DirectX-Specs/d3d/HLSL_SM_6_6_DynamicResources.html
         uint8_t bindless;
 
@@ -1977,39 +2190,77 @@ NriStruct(DeviceDesc) {
 
     // Features
     struct {
-        // Bigger
-        uint32_t getMemoryDesc2                                  : 1; // "GetXxxMemoryDesc2" support (VK: requires "maintenance4", D3D: supported)
-        uint32_t enhancedBarriers                                : 1; // VK: supported, D3D12: requires "AgilitySDK", D3D11: unsupported
-        uint32_t swapChain                                       : 1; // NRISwapChain
-        uint32_t meshShader                                      : 1; // NRIMeshShader
-        uint32_t lowLatency                                      : 1; // NRILowLatency
+        // Swap chain
+        bool swapChain;                                           // NRISwapChain
+        bool presentFromCompute;                                  // see "SwapChainDesc::queue"
+        bool waitableSwapChain;                                   // see "SwapChainDesc::waitable"
+        bool resizableSwapChain;                                  // swap chain can be resized without triggering an "OUT_OF_DATE" error
 
-        // Smaller
-        uint32_t componentSwizzle                                : 1; // see "ComponentSwizzle" (unsupported only in D3D11)
-        uint32_t independentFrontAndBackStencilReferenceAndMasks : 1; // see "StencilAttachmentDesc::back"
-        uint32_t filterOpMinMax                                  : 1; // see "FilterOp"
-        uint32_t logicOp                                         : 1; // see "LogicOp"
-        uint32_t depthBoundsTest                                 : 1; // see "DepthAttachmentDesc::boundsTest"
-        uint32_t drawIndirectCount                               : 1; // see "countBuffer" and "countBufferOffset"
-        uint32_t lineSmoothing                                   : 1; // see "RasterizationDesc::lineSmoothing"
-        uint32_t copyQueueTimestamp                              : 1; // see "QueryType::TIMESTAMP_COPY_QUEUE"
-        uint32_t meshShaderPipelineStats                         : 1; // see "PipelineStatisticsDesc"
-        uint32_t dynamicDepthBias                                : 1; // see "CmdSetDepthBias"
-        uint32_t additionalShadingRates                          : 1; // see "ShadingRate"
-        uint32_t viewportOriginBottomLeft                        : 1; // see "Viewport"
-        uint32_t regionResolve                                   : 1; // see "CmdResolveTexture"
-        uint32_t resolveOpMinMax                                 : 1; // see "ResolveOp"
-        uint32_t flexibleMultiview                               : 1; // see "Multiview::FLEXIBLE"
-        uint32_t layerBasedMultiview                             : 1; // see "Multiview::LAYRED_BASED"
-        uint32_t viewportBasedMultiview                          : 1; // see "Multiview::VIEWPORT_BASED"
-        uint32_t presentFromCompute                              : 1; // see "SwapChainDesc::queue"
-        uint32_t waitableSwapChain                               : 1; // see "SwapChainDesc::waitable"
-        uint32_t resizableSwapChain                              : 1; // swap chain can be resized without triggering an "OUT_OF_DATE" error
-        uint32_t pipelineStatistics                              : 1; // see "QueryType::PIPELINE_STATISTICS"
-        uint32_t rootConstantsOffset                             : 1; // see "SetRootConstantsDesc" (unsupported only in D3D11)
-        uint32_t nonConstantBufferRootDescriptorOffset           : 1; // see "SetRootDescriptorDesc" (unsupported only in D3D11)
-        uint32_t mutableDescriptorType                           : 1; // see "DescriptorType::MUTABLE"
-        uint32_t unifiedTextureLayouts                           : 1; // allows to use "GENERAL" everywhere: https://docs.vulkan.org/refpages/latest/refpages/source/VK_KHR_unified_image_layouts.html
+        // Multi view
+        bool flexibleMultiview;                                   // see "Multiview::FLEXIBLE"
+        bool layerBasedMultiview;                                 // see "Multiview::LAYRED_BASED"
+        bool viewportBasedMultiview;                              // see "Multiview::VIEWPORT_BASED"
+
+        // Texture compression
+        bool textureCompressionBC;                                // all "BC" texture formats are supported
+        bool textureCompressionETC2;                              // all "ETC2" texture formats are supported
+        bool textureCompressionASTC;                              // all "ASTC" texture formats are supported
+
+        // Shader bytecode
+        bool shaderBytecodeDXBC;                                  // DXBC can be passed to "ShaderDesc::bytecode"
+        bool shaderBytecodeDXIL;                                  // DXIL can be passed to "ShaderDesc::bytecode"
+        bool shaderBytecodeSPIRV;                                 // SPIRV can be passed to "ShaderDesc::bytecode", WGPU expects Vulkan 1.2 environment
+        bool shaderBytecodeWGSL;                                  // WGSL can be passed to "ShaderDesc::bytecode"
+
+        // Queries
+        bool occlusion;                                           // see "QueryType::OCCLUSION"
+        bool timestamp;                                           // see "QueryType::TIMESTAMP"
+        bool timestampCopyQueue;                                  // see "QueryType::TIMESTAMP_COPY_QUEUE", see "other.timestampCopyQueueResolveOnCopyQueue"
+        bool calibratedTimestamps;                                // see "GetCalibratedTimestamps"
+
+        // Shading rate
+        bool additionalShadingRates;                              // see "ShadingRate"
+        bool sumShadingRateCombiner;                              // see "ShadingRateCombiner::SUM"
+
+        // Clear
+        bool rectColorClears;                                     // see "CmdClearAttachments"
+        bool rectDepthStencilClears;                              // see "CmdClearAttachments"
+
+        // Resolve
+        bool regionResolve;                                       // see "CmdResolveTexture"
+        bool resolveOpMinMax;                                     // see "ResolveOp"
+
+        // Pipeline cache
+        bool pipelineCache;                                       // "PipelineCache" support (NOP fallback if unsupported, except on error)
+        bool pipelineCacheControl;                                // "FAIL_ON_CACHE_MISS" enforces "FAILURE", useful for platforms that prohibit runtime PSO compilation (e.g., Xbox GDK)
+
+        // Other
+        bool getMemoryDesc2;                                      // "GetXxxMemoryDesc2" support (VK: requires "maintenance4", D3D: supported)
+        bool enhancedBarriers;                                    // VK: supported, D3D12: requires "AgilitySDK", D3D11: unsupported
+        bool tessellationShader;                                  // Tessellation control and evaluation shader stages
+        bool geometryShader;                                      // Geometry shader stage
+        bool meshShader;                                          // NRIMeshShader
+        bool lowLatency;                                          // NRILowLatency
+        bool descriptorHeap;                                      // NRIDescriptorHeap
+        bool video;                                               // NRIVideo
+        bool componentSwizzle;                                    // see "ComponentSwizzle" (unsupported only in D3D11)
+        bool independentFrontAndBackStencilReferenceAndMasks;     // see "StencilAttachmentDesc::back"
+        bool filterOpMinMax;                                      // see "FilterOp"
+        bool constantAlphaBlendFactors;                           // see "BlendFactor::CONSTANT_ALPHA" and "BlendFactor::ONE_MINUS_CONSTANT_ALPHA"
+        bool logicOp;                                             // see "LogicOp"
+        bool depthBoundsTest;                                     // see "DepthAttachmentDesc::boundsTest"
+        bool drawIndirectCount;                                   // see "countBuffer" and "countBufferOffset"
+        bool lineSmoothing;                                       // see "RasterizationDesc::lineSmoothing"
+        bool meshShaderPipelineStats;                             // see "PipelineStatisticsDesc"
+        bool dynamicDepthBias;                                    // see "CmdSetDepthBias"
+        bool viewportOriginBottomLeft;                            // see "Viewport"
+        bool pipelineStatistics;                                  // see "QueryType::PIPELINE_STATISTICS"
+        bool rootConstantsOffset;                                 // see "SetRootConstantsDesc" (unsupported only in D3D11)
+        bool nonConstantBufferRootDescriptorOffset;               // see "SetRootDescriptorDesc" (unsupported only in D3D11)
+        bool mutableDescriptorType;                               // see "DescriptorType::MUTABLE"
+        bool extendedDynamicState;                                // VK: allows to use "VertexBufferDesc::stride" (dynamic) instead of "VertexStreamDesc::stride" (static). Widely supported
+        bool unifiedTextureLayouts;                               // VK: allows to use "GENERAL" everywhere: https://docs.vulkan.org/refpages/latest/refpages/source/VK_KHR_unified_image_layouts.html
+        bool resourceAliasing;                                    // binding multiple distinct texture or buffer objects to overlap the same underlying memory allocation (unsupported only in D3D11)
     } features;
 
     // Shader features
@@ -2017,52 +2268,64 @@ NriStruct(DeviceDesc) {
     struct {
         // Native types (I32 and F32 are always supported)
         // https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-scalar
-        uint32_t nativeI8                                        : 1; // "(u)int8_t"
-        uint32_t nativeI16                                       : 1; // "(u)int16_t"
-        uint32_t nativeF16                                       : 1; // "float16_t"
-        uint32_t nativeI64                                       : 1; // "(u)int64_t"
-        uint32_t nativeF64                                       : 1; // "double"
+        bool nativeI8;                                             // "(u)int8_t"
+        bool nativeI16;                                            // "(u)int16_t"
+        bool nativeF16;                                            // "float16_t"
+        bool nativeI64;                                            // "(u)int64_t"
+        bool nativeF64;                                            // "double"
 
         // Atomics on native types (I32 atomics are always supported, for others it can be partial support of SMEM, texture or buffer atomics)
         // https://learn.microsoft.com/en-us/windows/win32/direct3d11/direct3d-11-advanced-stages-cs-atomic-functions
         // https://microsoft.github.io/DirectX-Specs/d3d/HLSL_SM_6_6_Int64_and_Float_Atomics.html
-        uint32_t atomicsI16                                      : 1; // "(u)int16_t" atomics
-        uint32_t atomicsF16                                      : 1; // "float16_t" atomics
-        uint32_t atomicsF32                                      : 1; // "float" atomics
-        uint32_t atomicsI64                                      : 1; // "(u)int64_t" atomics
-        uint32_t atomicsF64                                      : 1; // "double" atomics
+        bool atomicsI16;                                           // "(u)int16_t" atomics
+        bool atomicsF16;                                           // "float16_t" atomics
+        bool atomicsF32;                                           // "float" atomics
+        bool atomicsI64;                                           // "(u)int64_t" atomics
+        bool atomicsF64;                                           // "double" atomics
 
         // Storage without format
         // https://learn.microsoft.com/en-us/windows/win32/direct3d12/typed-unordered-access-view-loads#using-unorm-and-snorm-typed-uav-loads-from-hlsl
-        uint32_t storageReadWithoutFormat                        : 1; // NRI_FORMAT("unknown") is allowed for storage reads
-        uint32_t storageWriteWithoutFormat                       : 1; // NRI_FORMAT("unknown") is allowed for storage writes
+        bool storageReadWithoutFormat;                             // NRI_FORMAT("unknown") is allowed for storage reads
+        bool storageWriteWithoutFormat;                            // NRI_FORMAT("unknown") is allowed for storage writes
 
         // Wave intrinsics
         // https://github.com/microsoft/directxshadercompiler/wiki/wave-intrinsics
-        uint32_t waveQuery                                       : 1; // WaveIsFirstLane, WaveGetLaneCount, WaveGetLaneIndex
-        uint32_t waveVote                                        : 1; // WaveActiveAllTrue, WaveActiveAnyTrue, WaveActiveAllEqual
-        uint32_t waveShuffle                                     : 1; // WaveReadLaneFirst, WaveReadLaneAt
-        uint32_t waveArithmetic                                  : 1; // WaveActiveSum, WaveActiveProduct, WaveActiveMin, WaveActiveMax, WavePrefixProduct, WavePrefixSum
-        uint32_t waveReduction                                   : 1; // WaveActiveCountBits, WaveActiveBitAnd, WaveActiveBitOr, WaveActiveBitXor, WavePrefixCountBits
-        uint32_t waveQuad                                        : 1; // QuadReadLaneAt, QuadReadAcrossX, QuadReadAcrossY, QuadReadAcrossDiagonal
+        bool waveQuery;                                            // WaveIsFirstLane, WaveGetLaneCount, WaveGetLaneIndex
+        bool waveVote;                                             // WaveActiveAllTrue, WaveActiveAnyTrue, WaveActiveAllEqual
+        bool waveShuffle;                                          // WaveReadLaneFirst, WaveReadLaneAt
+        bool waveArithmetic;                                       // WaveActiveSum, WaveActiveProduct, WaveActiveMin, WaveActiveMax, WavePrefixProduct, WavePrefixSum
+        bool waveReduction;                                        // WaveActiveCountBits, WaveActiveBitAnd, WaveActiveBitOr, WaveActiveBitXor, WavePrefixCountBits
+        bool waveQuad;                                             // QuadReadLaneAt, QuadReadAcrossX, QuadReadAcrossY, QuadReadAcrossDiagonal
 
         // Other
-        uint32_t viewportIndex                                   : 1; // SV_ViewportArrayIndex, always can be used in geometry shaders
-        uint32_t layerIndex                                      : 1; // SV_RenderTargetArrayIndex, always can be used in geometry shaders
-        uint32_t unnormalizedCoordinates                         : 1; // https://microsoft.github.io/DirectX-Specs/d3d/VulkanOn12.html#non-normalized-texture-sampling-coordinates
-        uint32_t clock                                           : 1; // https://github.com/Microsoft/DirectXShaderCompiler/blob/main/docs/SPIR-V.rst#readclock
-        uint32_t rasterizedOrderedView                           : 1; // https://microsoft.github.io/DirectX-Specs/d3d/RasterOrderViews.html (aka fragment shader interlock)
-        uint32_t barycentric                                     : 1; // https://github.com/microsoft/DirectXShaderCompiler/wiki/SV_Barycentrics
-        uint32_t rayTracingPositionFetch                         : 1; // https://docs.vulkan.org/features/latest/features/proposals/VK_KHR_ray_tracing_position_fetch.html
-        uint32_t integerDotProduct                               : 1; // https://github.com/microsoft/DirectXShaderCompiler/wiki/Shader-Model-6.4
-        uint32_t inputAttachments                                : 1; // https://github.com/Microsoft/DirectXShaderCompiler/blob/main/docs/SPIR-V.rst#subpass-inputs
-        uint32_t drawParameters                                  : 1; // SV_StartVertexLocation, SV_StartInstanceLocation (native support)
+        bool viewportIndex;                                        // SV_ViewportArrayIndex, always can be used in geometry shaders
+        bool layerIndex;                                           // SV_RenderTargetArrayIndex, always can be used in geometry shaders
+        bool unnormalizedCoordinates;                              // https://microsoft.github.io/DirectX-Specs/d3d/VulkanOn12.html#non-normalized-texture-sampling-coordinates
+        bool clock;                                                // https://github.com/Microsoft/DirectXShaderCompiler/blob/main/docs/SPIR-V.rst#readclock
+        bool rasterizedOrderedView;                                // https://microsoft.github.io/DirectX-Specs/d3d/RasterOrderViews.html (aka fragment shader interlock)
+        bool barycentric;                                          // https://github.com/microsoft/DirectXShaderCompiler/wiki/SV_Barycentrics
+        bool rayTracingPositionFetch;                              // https://docs.vulkan.org/features/latest/features/proposals/VK_KHR_ray_tracing_position_fetch.html
+        bool integerDotProduct;                                    // https://github.com/microsoft/DirectXShaderCompiler/wiki/Shader-Model-6.4
+        bool inputAttachments;                                     // https://github.com/Microsoft/DirectXShaderCompiler/blob/main/docs/SPIR-V.rst#subpass-inputs
 
-        // For shaders using "draw parameters":
-        //   - "ENABLE_DRAW_PARAMETERS_EMULATION" must be set for a corresponding "PipelineLayout"
-        //   - "NRI_ENABLE_DRAW_PARAMETERS_EMULATION" must be defined prior inclusion of "NRI.hlsl" for such shaders
-        uint32_t drawParametersEmulation                         : 1; // emulation of "drawParameters"
+        bool drawParameters;                                       // GAPI-independent "NRI_BASE_VERTEX", "NRI_BASE_INSTANCE", "NRI_VERTEX_ID_OFFSET" and "NRI_INSTANCE_ID_OFFSET" (see "NRI.hlsl" for expected usage)
+        bool drawIndex;                                            // GAPI-independent "NRI_DRAW_ID" (see "NRI.hlsl" for expected usage)
     } shaderFeatures;
+
+    // Video
+    struct {
+        struct {
+            bool H264;
+            bool H265;
+            bool AV1;
+        } decode;
+
+        struct {
+            bool H264;
+            bool H265;
+            bool AV1;
+        } encode;
+    } videoFeatures;
 };
 
 #pragma endregion

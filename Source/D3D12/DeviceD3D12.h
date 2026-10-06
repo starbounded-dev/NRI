@@ -1,22 +1,22 @@
-﻿// © 2021 NVIDIA Corporation
+// © 2021 NVIDIA Corporation
 
 #pragma once
 
-struct IDXGIAdapter;
-struct ID3D12DescriptorHeap;
-struct ID3D12CommandSignature;
-
 #if NRI_ENABLE_AGILITY_SDK_SUPPORT
-struct ID3D12Device15;
 typedef ID3D12Device15 ID3D12DeviceBest;
 #else
-struct ID3D12Device5;
-typedef ID3D12Device5 ID3D12DeviceBest;
+typedef ID3D12Device8 ID3D12DeviceBest;
 #endif
 
 namespace nri {
 
-struct QueueD3D12;
+struct HostCopyLayoutD3D12 {
+    TextureDataLayoutDesc dataLayout;
+    uint64_t slicePitch;
+    uint32_t rowSize;
+    uint32_t rowNum;
+    uint32_t depth;
+};
 
 struct DeviceD3D12 final : public DeviceBase {
     DeviceD3D12(const CallbackInterface& callbacks, const AllocationCallbacks& allocationCallbacks);
@@ -97,18 +97,18 @@ struct DeviceD3D12 final : public DeviceBase {
     }
 
     Result Create(const DeviceCreationDesc& deviceCreationDesc, const DeviceCreationD3D12Desc& deviceCreationD3D12Desc);
-    Result CreateDefaultDrawSignatures(ID3D12RootSignature* rootSignature, bool enableDrawParametersEmulation);
+    Result CreateDefaultDrawSignatures(const PipelineLayoutD3D12& pipelineLayout);
     Result GetDescriptorHandle(D3D12_DESCRIPTOR_HEAP_TYPE type, DescriptorHandle& descriptorHandle);
     void FreeDescriptorHandle(const DescriptorHandle& descriptorHandle);
-    void GetResourceDesc(const BufferDesc& bufferDesc, D3D12_RESOURCE_DESC& desc) const;
-    void GetResourceDesc(const TextureDesc& textureDesc, D3D12_RESOURCE_DESC& desc) const;
-    void GetMemoryDesc(MemoryLocation memoryLocation, const D3D12_RESOURCE_DESC& resourceDesc, MemoryDesc& memoryDesc) const;
+    void GetResourceDesc(const BufferDesc& bufferDesc, D3D12_RESOURCE_DESC1& desc) const;
+    void GetResourceDesc(const TextureDesc& textureDesc, D3D12_RESOURCE_DESC1& desc) const;
+    void GetMemoryDesc(MemoryLocation memoryLocation, const D3D12_RESOURCE_DESC1& resourceDesc, MemoryDesc& memoryDesc) const;
     void GetAccelerationStructurePrebuildInfo(const AccelerationStructureDesc& accelerationStructureDesc, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO& prebuildInfo) const;
     void GetMicromapPrebuildInfo(const MicromapDesc& micromapDesc, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO& prebuildInfo) const;
     D3D12_HEAP_TYPE GetHeapType(MemoryLocation memoryLocation) const;
     DescriptorHandleCPU GetDescriptorHandleCPU(const DescriptorHandle& descriptorHandle);
-    ID3D12CommandSignature* GetDrawCommandSignature(uint32_t stride, ID3D12RootSignature* rootSignature);
-    ID3D12CommandSignature* GetDrawIndexedCommandSignature(uint32_t stride, ID3D12RootSignature* rootSignature);
+    ID3D12CommandSignature* GetDrawCommandSignature(const PipelineLayoutD3D12* pipelineLayout, uint32_t stride);
+    ID3D12CommandSignature* GetDrawIndexedCommandSignature(const PipelineLayoutD3D12* pipelineLayout, uint32_t stride);
     ID3D12CommandSignature* GetDrawMeshCommandSignature(uint32_t stride);
     ID3D12CommandSignature* GetDispatchRaysCommandSignature() const;
     ID3D12CommandSignature* GetDispatchCommandSignature() const;
@@ -130,11 +130,14 @@ struct DeviceD3D12 final : public DeviceBase {
     }
 
     void Destruct() override;
+    Result ReportDeviceLostInfo(DeviceLostDump& deviceLostDump) override;
     Result FillFunctionTable(CoreInterface& table) const override;
+    Result FillFunctionTable(DescriptorHeapInterface& table) const override;
     Result FillFunctionTable(HelperInterface& table) const override;
     Result FillFunctionTable(LowLatencyInterface& table) const override;
     Result FillFunctionTable(MeshShaderInterface& table) const override;
     Result FillFunctionTable(RayTracingInterface& table) const override;
+    Result FillFunctionTable(VideoInterface& table) const override;
     Result FillFunctionTable(StreamerInterface& table) const override;
     Result FillFunctionTable(SwapChainInterface& table) const override;
     Result FillFunctionTable(UpscalerInterface& table) const override;
@@ -150,19 +153,22 @@ struct DeviceD3D12 final : public DeviceBase {
 
     Result GetQueue(QueueType queueType, uint32_t queueIndex, Queue*& queue);
     Result WaitIdle();
-    Result BindBufferMemory(const BindBufferMemoryDesc* bindBufferMemoryDescs, uint32_t bindBufferMemoryDescNum);
-    Result BindTextureMemory(const BindTextureMemoryDesc* bindTextureMemoryDescs, uint32_t bindTextureMemoryDescNum);
-    Result BindAccelerationStructureMemory(const BindAccelerationStructureMemoryDesc* bindAccelerationStructureMemoryDescs, uint32_t bindAccelerationStructureMemoryDescNum);
-    Result BindMicromapMemory(const BindMicromapMemoryDesc* bindMicromapMemoryDescs, uint32_t bindMicromapMemoryDescNum);
+    Result UploadHostMemoryToTexture(QueueD3D12& queue, const UploadHostMemoryToTextureDesc* copyDescs, uint32_t copyDescNum);
+    Result ReadbackTextureToHostMemory(QueueD3D12& queue, const ReadbackTextureToHostMemoryDesc* copyDescs, uint32_t copyDescNum);
     FormatSupportBits GetFormatSupport(Format format) const;
 
 private:
+    void ReportDredAllocationList(const char* listName, const D3D12_DRED_ALLOCATION_NODE1* head) const;
+    void ReportDred(ID3D12Device* nativeDevice) const;
+    HostCopyLayoutD3D12 GetHostCopyLayout(const TextureD3D12& texture, const TextureRegionDesc& region, uint64_t& offset) const;
+    Result AcquireTransferContext(QueueD3D12& queue, TransferContextD3D12*& context);
+    void ReleaseTransferContext(TransferContextD3D12& context);
     HRESULT CreateVma();
     void FillDesc(bool disableD3D12EnhancedBarrier);
     void InitializeNvExt(bool disableNVAPIInitialization, bool isImported);
     void InitializeAmdExt(AGSContext* agsContext, bool isImported);
     void InitializePixExt();
-    ComPtr<ID3D12CommandSignature> CreateCommandSignature(D3D12_INDIRECT_ARGUMENT_TYPE type, uint32_t stride, ID3D12RootSignature* rootSignature, bool enableDrawParametersEmulation = false);
+    ComPtr<ID3D12CommandSignature> CreateCommandSignature(D3D12_INDIRECT_ARGUMENT_TYPE type, uint32_t stride, ID3D12RootSignature* rootSignature, uint32_t drawParametersRootConstantIndex, uint32_t drawIndexRootConstantIndex);
 
 private:
     // Order of destructors is important
@@ -182,12 +188,13 @@ private:
     ComPtr<ID3D12CommandSignature> m_DispatchRaysCommandSignature;
     ComPtr<D3D12MA::Allocator> m_Vma;
     ComPtr<ID3D12Resource> m_ZeroBuffer;
-    Vector<DescriptorHeapDesc> m_DescriptorHeaps;                                          // m_DescriptorHeapLock
+    Vector<DescriptorHeapDescD3D12> m_DescriptorHeaps;                                     // m_DescriptorHeapLock
     Vector<Vector<DescriptorHandle>> m_FreeDescriptors;                                    // m_FreeDescriptorLocks
     UnorderedMap<uint64_t, ComPtr<ID3D12CommandSignature>> m_DrawCommandSignatures;        // m_CommandSignatureLock
     UnorderedMap<uint64_t, ComPtr<ID3D12CommandSignature>> m_DrawIndexedCommandSignatures; // m_CommandSignatureLock
     UnorderedMap<uint32_t, ComPtr<ID3D12CommandSignature>> m_DrawMeshCommandSignatures;    // m_CommandSignatureLock
     std::array<Vector<QueueD3D12*>, (size_t)QueueType::MAX_NUM> m_QueueFamilies;
+    Vector<TransferContextD3D12*> m_TransferContexts;
     CoreInterface m_iCore = {};
     DeviceDesc m_Desc = {};
     void* m_CallbackHandle = nullptr;
@@ -200,6 +207,7 @@ private:
     std::array<Lock, D3D12_DESCRIPTOR_HEAP_TYPE_NUM_TYPES> m_FreeDescriptorLocks;
     Lock m_DescriptorHeapLock;
     Lock m_CommandSignatureLock;
+    Lock m_TransferContextLock;
 };
 
 } // namespace nri

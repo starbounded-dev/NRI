@@ -11,7 +11,6 @@ constexpr RootParameterIndexType ROOT_PARAMETER_UNUSED = RootParameterIndexType(
 
 struct DescriptorRangeMapping {
     uint32_t heapOffset;
-    uint32_t descriptorNum;
     RootParameterIndexType rootParameterIndex;
     DescriptorHeapType descriptorHeapType;
 };
@@ -23,6 +22,7 @@ struct DescriptorSetMapping {
 
     Vector<DescriptorRangeMapping> descriptorRangeMappings;
     std::array<uint32_t, DescriptorHeapType::MAX_NUM> descriptorNum = {};
+    std::array<uint32_t, DescriptorHeapType::MAX_NUM> variableDescriptorMaxNum = {};
 };
 
 struct PipelineLayoutD3D12 final : public DebugNameBase {
@@ -41,6 +41,18 @@ struct PipelineLayoutD3D12 final : public DebugNameBase {
 
     inline bool IsDrawParametersEmulationEnabled() const {
         return m_DrawParametersEmulation;
+    }
+
+    inline bool IsDrawIndexEmulationEnabled() const {
+        return m_DrawIndexEmulation;
+    }
+
+    inline RootParameterIndexType GetDrawParametersRootConstantIndex() const {
+        return m_DrawParametersRootConstantIndex;
+    }
+
+    inline RootParameterIndexType GetDrawIndexRootConstantIndex() const {
+        return m_DrawIndexRootConstantIndex;
     }
 
     inline const DescriptorSetMapping& GetDescriptorSetMapping(uint32_t setIndex) const {
@@ -66,7 +78,10 @@ private:
     Vector<DescriptorSetMapping> m_DescriptorSetMappings;
     uint32_t m_BaseRootConstant = 0;
     uint32_t m_BaseRootDescriptor = 0;
+    RootParameterIndexType m_DrawParametersRootConstantIndex = ROOT_PARAMETER_UNUSED;
+    RootParameterIndexType m_DrawIndexRootConstantIndex = ROOT_PARAMETER_UNUSED;
     bool m_DrawParametersEmulation = false;
+    bool m_DrawIndexEmulation = false;
 };
 
 } // namespace nri

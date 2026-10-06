@@ -49,11 +49,12 @@ private:
         Vector<Texture*> textures;
         Vector<uint64_t> textureOffsets;
         uint64_t size;
+        uint32_t alignment;
         MemoryType type;
     };
 
     Result TryToAllocateAndBindMemory(const ResourceGroupDesc& resourceGroupDesc, Memory** allocations, size_t& allocationNum);
-    Result ProcessDedicatedResources(MemoryLocation memoryLocation, Memory** allocations, size_t& allocationNum);
+    Result ProcessDedicatedResources(const ResourceGroupDesc& resourceGroupDesc, Memory** allocations, size_t& allocationNum);
     MemoryHeap& FindOrCreateHeap(const MemoryDesc& memoryDesc, uint64_t preferredMemorySize);
     void GroupByMemoryType(MemoryLocation memoryLocation, const ResourceGroupDesc& resourceGroupDesc);
     void FillMemoryBindingDescs(Buffer* const* buffers, const uint64_t* bufferOffsets, uint32_t bufferNum, Memory& memory);

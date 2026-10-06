@@ -1,9 +1,11 @@
 // © 2021 NVIDIA Corporation
 
 constexpr std::array<D3D12_COMMAND_LIST_TYPE, (size_t)QueueType::MAX_NUM> g_CommandListTypes = {
-    D3D12_COMMAND_LIST_TYPE_DIRECT,  // GRAPHICS,
-    D3D12_COMMAND_LIST_TYPE_COMPUTE, // COMPUTE,
-    D3D12_COMMAND_LIST_TYPE_COPY,    // COPY,
+    D3D12_COMMAND_LIST_TYPE_DIRECT,       // GRAPHICS,
+    D3D12_COMMAND_LIST_TYPE_COMPUTE,      // COMPUTE,
+    D3D12_COMMAND_LIST_TYPE_COPY,         // COPY,
+    D3D12_COMMAND_LIST_TYPE_VIDEO_DECODE, // VIDEO_DECODE,
+    D3D12_COMMAND_LIST_TYPE_VIDEO_ENCODE, // VIDEO_ENCODE,
 };
 NRI_VALIDATE_ARRAY(g_CommandListTypes);
 
@@ -35,7 +37,8 @@ constexpr std::array<D3D12_DESCRIPTOR_RANGE_TYPE, (size_t)DescriptorType::MAX_NU
     D3D12_DESCRIPTOR_RANGE_TYPE_UAV,     // STORAGE_STRUCTURED_BUFFER
     D3D12_DESCRIPTOR_RANGE_TYPE_SRV,     // ACCELERATION_STRUCTURE
 };
-//NRI_VALIDATE_ARRAY(g_DescriptorRangeTypes); // TODO: 0 is expected for ACCELERATION_STRUCTURE
+
+// NRI_VALIDATE_ARRAY(g_DescriptorRangeTypes); // TODO: 0 is expected for ACCELERATION_STRUCTURE
 
 D3D12_DESCRIPTOR_RANGE_TYPE nri::GetDescriptorRangesType(DescriptorType descriptorType) {
     return g_DescriptorRangeTypes[(size_t)descriptorType];
@@ -190,7 +193,16 @@ constexpr std::array<D3D12_BLEND, (size_t)BlendFactor::MAX_NUM> g_BlendFactors =
 };
 NRI_VALIDATE_ARRAY(g_BlendFactors);
 
-D3D12_BLEND nri::GetBlend(BlendFactor blendFactor) {
+D3D12_BLEND nri::GetBlend(BlendFactor blendFactor, bool isAlphaBlend) {
+#if NRI_ENABLE_AGILITY_SDK_SUPPORT
+    if (isAlphaBlend && blendFactor == BlendFactor::CONSTANT_ALPHA)
+        return D3D12_BLEND_BLEND_FACTOR;
+    if (isAlphaBlend && blendFactor == BlendFactor::ONE_MINUS_CONSTANT_ALPHA)
+        return D3D12_BLEND_INV_BLEND_FACTOR;
+#else
+    MaybeUnused(isAlphaBlend);
+#endif
+
     return g_BlendFactors[(size_t)blendFactor];
 }
 
@@ -405,6 +417,7 @@ bool nri::GetTextureDesc(const TextureD3D12Desc& textureD3D12Desc, TextureDesc& 
     textureDesc.mipNum = (Dim_t)desc.MipLevels;
     textureDesc.layerNum = textureDesc.type == TextureType::TEXTURE_3D ? 1 : (Dim_t)desc.DepthOrArraySize;
     textureDesc.sampleNum = (uint8_t)desc.SampleDesc.Count;
+    textureDesc.usage = TextureUsageBits::HOST_TRANSFER;
 
     if (desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
         textureDesc.usage |= TextureUsageBits::COLOR_ATTACHMENT;
@@ -414,6 +427,10 @@ bool nri::GetTextureDesc(const TextureD3D12Desc& textureD3D12Desc, TextureDesc& 
         textureDesc.usage |= TextureUsageBits::SHADER_RESOURCE | TextureUsageBits::INPUT_ATTACHMENT;
     if (desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS)
         textureDesc.usage |= TextureUsageBits::SHADER_RESOURCE_STORAGE;
+    if (desc.Flags & D3D12_RESOURCE_FLAG_VIDEO_DECODE_REFERENCE_ONLY)
+        textureDesc.usage |= TextureUsageBits::VIDEO_DECODE | TextureUsageBits::VIDEO_REFERENCE_ONLY;
+    if (desc.Flags & D3D12_RESOURCE_FLAG_VIDEO_ENCODE_REFERENCE_ONLY)
+        textureDesc.usage |= TextureUsageBits::VIDEO_ENCODE | TextureUsageBits::VIDEO_REFERENCE_ONLY;
 
     if (textureD3D12Desc.format)
         textureDesc.format = DXGIFormatToNRIFormat(textureD3D12Desc.format);
@@ -436,7 +453,7 @@ bool nri::GetBufferDesc(const BufferD3D12Desc& bufferD3D12Desc, BufferDesc& buff
     bufferDesc.structureStride = bufferD3D12Desc.structureStride;
 
     // There are almost no restrictions on usages in D3D12
-    bufferDesc.usage = BufferUsageBits::VERTEX_BUFFER | BufferUsageBits::INDEX_BUFFER | BufferUsageBits::CONSTANT_BUFFER | BufferUsageBits::ARGUMENT_BUFFER | BufferUsageBits::ACCELERATION_STRUCTURE_BUILD_INPUT;
+    bufferDesc.usage = BufferUsageBits::VERTEX | BufferUsageBits::INDEX | BufferUsageBits::CONSTANT | BufferUsageBits::ARGUMENT | BufferUsageBits::ACCELERATION_STRUCTURE_BUILD_INPUT;
 
     if (!(desc.Flags & D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE))
         bufferDesc.usage |= BufferUsageBits::SHADER_RESOURCE;
@@ -446,7 +463,7 @@ bool nri::GetBufferDesc(const BufferD3D12Desc& bufferD3D12Desc, BufferDesc& buff
     return true;
 }
 
-void nri::ConvertBotomLevelGeometries(const BottomLevelGeometryDesc* geometries, uint32_t geometryNum,
+void nri::ConvertBottomLevelGeometries(const BottomLevelGeometryDesc* geometries, uint32_t geometryNum,
     D3D12_RAYTRACING_GEOMETRY_DESC* geometryDescs,
     D3D12_RAYTRACING_GEOMETRY_TRIANGLES_DESC* triangleDescs,
     D3D12_RAYTRACING_GEOMETRY_OMM_LINKAGE_DESC* micromapDescs) {
@@ -464,9 +481,9 @@ void nri::ConvertBotomLevelGeometries(const BottomLevelGeometryDesc* geometries,
             const BottomLevelTrianglesDesc& triangles = in.triangles;
             D3D12_RAYTRACING_GEOMETRY_TRIANGLES_DESC* outTriangles = &out.Triangles;
 
-#ifdef NRI_D3D12_HAS_OPACITY_MICROMAP
+#if NRI_ENABLE_AGILITY_SDK_SUPPORT
             if (in.triangles.micromap) {
-                const BottomLevelMicromapDesc& micromapDesc = *in.triangles.micromap;
+                const BottomLevelTrianglesMicromapDesc& micromapDesc = *in.triangles.micromap;
 
                 outTriangles = triangleDescs++;
                 D3D12_RAYTRACING_GEOMETRY_OMM_LINKAGE_DESC* outMicromap = micromapDescs++;

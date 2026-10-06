@@ -12,7 +12,16 @@ NRI_INLINE void QueueVal::Annotation(const char* name, uint32_t bgra) {
     GetCoreInterfaceImpl().QueueAnnotation(*GetImpl(), name, bgra);
 }
 
+NRI_INLINE void QueueVal::GetCalibratedTimestamps(uint64_t& timestampGPU, uint64_t& timestampCPU) {
+    const DeviceDesc& deviceDesc = m_Device.GetDesc();
+    NRI_RETURN_ON_FAILURE(&m_Device, deviceDesc.features.calibratedTimestamps, ReturnVoid(), "'features.calibratedTimestamps' is false");
+
+    GetCoreInterfaceImpl().GetCalibratedTimestamps(*GetImpl(), timestampGPU, timestampCPU);
+}
+
 NRI_INLINE Result QueueVal::Submit(const QueueSubmitDesc& queueSubmitDesc) {
+    NRI_RETURN_ON_FAILURE(&m_Device, !queueSubmitDesc.swapChain || queueSubmitDesc.presentId != 0, Result::INVALID_ARGUMENT, "'presentId' is 0");
+
     auto queueSubmitDescImpl = queueSubmitDesc;
 
     Scratch<FenceSubmitDesc> waitFences = NRI_ALLOCATE_SCRATCH(m_Device, FenceSubmitDesc, queueSubmitDesc.waitFenceNum);

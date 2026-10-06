@@ -4,7 +4,7 @@
 
 namespace nri {
 
-uint32_t ConvertBotomLevelGeometries(
+uint32_t ConvertBottomLevelGeometries(
     VkAccelerationStructureBuildRangeInfoKHR* vkRanges,
     VkAccelerationStructureGeometryKHR* vkGeometries,
     VkAccelerationStructureTrianglesOpacityMicromapEXT* vkTrianglesMicromaps,
@@ -35,10 +35,15 @@ constexpr VkAttachmentLoadOp GetLoadOp(LoadOp loadOp) {
 constexpr std::array<VkAttachmentStoreOp, (size_t)StoreOp::MAX_NUM> g_StoreOps = {
     VK_ATTACHMENT_STORE_OP_STORE,     // STORE
     VK_ATTACHMENT_STORE_OP_DONT_CARE, // DISCARD
+    VK_ATTACHMENT_STORE_OP_NONE,      // NONE
 };
 NRI_VALIDATE_ARRAY(g_StoreOps);
 
-constexpr VkAttachmentStoreOp GetStoreOp(StoreOp storeOp) {
+constexpr VkAttachmentStoreOp GetStoreOp(StoreOp storeOp, bool storeOpNoneSupported) {
+    // "STORE" is the only legitimate fallback because it preserves the attachment contents
+    if (storeOp == StoreOp::NONE && !storeOpNoneSupported)
+        return VK_ATTACHMENT_STORE_OP_STORE;
+
     return g_StoreOps[(size_t)storeOp];
 }
 
@@ -72,6 +77,10 @@ constexpr std::array<VkImageLayout, (size_t)Layout::MAX_NUM> g_ImageLayouts = {
     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,                         // COPY_DESTINATION
     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,                         // RESOLVE_SOURCE
     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,                         // RESOLVE_DESTINATION
+    VK_IMAGE_LAYOUT_VIDEO_DECODE_DST_KHR,                         // VIDEO_DECODE_DST
+    VK_IMAGE_LAYOUT_VIDEO_DECODE_DPB_KHR,                         // VIDEO_DECODE_DPB
+    VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR,                         // VIDEO_ENCODE_SRC
+    VK_IMAGE_LAYOUT_VIDEO_ENCODE_DPB_KHR,                         // VIDEO_ENCODE_DPB
 };
 NRI_VALIDATE_ARRAY(g_ImageLayouts);
 
@@ -402,6 +411,9 @@ constexpr VkPipelineStageFlags2 GetPipelineStageFlags(StageBits stageBits) {
     if (stageBits & StageBits::COLOR_ATTACHMENT)
         flags |= VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
 
+    if (stageBits & StageBits::SHADING_RATE_ATTACHMENT)
+        flags |= VK_PIPELINE_STAGE_2_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR;
+
     if (stageBits & StageBits::COMPUTE_SHADER)
         flags |= VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 
@@ -419,6 +431,15 @@ constexpr VkPipelineStageFlags2 GetPipelineStageFlags(StageBits stageBits) {
 
     if (stageBits & StageBits::CLEAR_STORAGE)
         flags |= VK_PIPELINE_STAGE_2_CLEAR_BIT;
+
+    if (stageBits & StageBits::HOST)
+        flags |= VK_PIPELINE_STAGE_2_HOST_BIT;
+
+    if (stageBits & StageBits::VIDEO_DECODE)
+        flags |= VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR;
+
+    if (stageBits & StageBits::VIDEO_ENCODE)
+        flags |= VK_PIPELINE_STAGE_2_VIDEO_ENCODE_BIT_KHR;
 
     if (stageBits & StageBits::ACCELERATION_STRUCTURE)
         flags |= VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR; // already includes "VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_COPY_BIT_KHR" (more strict according to the spec)
@@ -485,28 +506,28 @@ constexpr VkShaderStageFlags GetShaderStageFlags(StageBits stage) {
     return stageFlags;
 }
 
-constexpr VkImageAspectFlags GetImageAspectFlags(Format format) {
-    switch (format) {
-        case Format::D16_UNORM:
-        case Format::D32_SFLOAT:
-        case Format::R24_UNORM_X8:
-        case Format::R32_SFLOAT_X8_X24:
-            return VK_IMAGE_ASPECT_DEPTH_BIT;
+constexpr VkImageAspectFlags GetImageAspectFlags(PlaneBits planes, Format format) {
+    if (planes == PlaneBits::ALL) {
+        switch (format) {
+            case Format::D16_UNORM:
+            case Format::D32_SFLOAT:
+                return VK_IMAGE_ASPECT_DEPTH_BIT;
 
-        case Format::D24_UNORM_S8_UINT:
-        case Format::D32_SFLOAT_S8_UINT_X24:
-            return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+            case Format::D24_UNORM_S8_UINT:
+            case Format::D32_SFLOAT_S8_UINT:
+                return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
 
-        case Format::X32_G8_UINT_X24:
-        case Format::X24_G8_UINT:
-            return VK_IMAGE_ASPECT_STENCIL_BIT;
+            case Format::NV12_UNORM:
+            case Format::P010_UNORM:
+            case Format::P016_UNORM:
+                return VK_IMAGE_ASPECT_PLANE_0_BIT | VK_IMAGE_ASPECT_PLANE_1_BIT;
 
-        default:
-            return VK_IMAGE_ASPECT_COLOR_BIT;
+            default:
+                return VK_IMAGE_ASPECT_COLOR_BIT;
+        }
     }
-}
 
-constexpr VkImageAspectFlags GetImageAspectFlags(PlaneBits planes) {
+    // I don't think we should filter out format-incompatible aspects...
     VkImageAspectFlags aspectFlags = 0;
     if (planes & PlaneBits::COLOR)
         aspectFlags |= VK_IMAGE_ASPECT_COLOR_BIT;
@@ -514,6 +535,12 @@ constexpr VkImageAspectFlags GetImageAspectFlags(PlaneBits planes) {
         aspectFlags |= VK_IMAGE_ASPECT_DEPTH_BIT;
     if (planes & PlaneBits::STENCIL)
         aspectFlags |= VK_IMAGE_ASPECT_STENCIL_BIT;
+    if (planes & PlaneBits::PLANE_0)
+        aspectFlags |= VK_IMAGE_ASPECT_PLANE_0_BIT;
+    if (planes & PlaneBits::PLANE_1)
+        aspectFlags |= VK_IMAGE_ASPECT_PLANE_1_BIT;
+    if (planes & PlaneBits::PLANE_2)
+        aspectFlags |= VK_IMAGE_ASPECT_PLANE_2_BIT;
 
     return aspectFlags;
 }
@@ -533,6 +560,11 @@ constexpr Result GetResultFromVkResult(VkResult vkResult) {
         case VK_ERROR_NATIVE_WINDOW_IN_USE_KHR:
         case VK_ERROR_INCOMPATIBLE_DISPLAY_KHR:
         case VK_ERROR_FORMAT_NOT_SUPPORTED:
+        case VK_ERROR_IMAGE_USAGE_NOT_SUPPORTED_KHR:
+        case VK_ERROR_VIDEO_PICTURE_LAYOUT_NOT_SUPPORTED_KHR:
+        case VK_ERROR_VIDEO_PROFILE_CODEC_NOT_SUPPORTED_KHR:
+        case VK_ERROR_VIDEO_PROFILE_FORMAT_NOT_SUPPORTED_KHR:
+        case VK_ERROR_VIDEO_PROFILE_OPERATION_NOT_SUPPORTED_KHR:
         case VK_ERROR_INCOMPATIBLE_DRIVER:
         case VK_ERROR_FEATURE_NOT_PRESENT:
         case VK_ERROR_EXTENSION_NOT_PRESENT:

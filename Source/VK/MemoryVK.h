@@ -2,12 +2,7 @@
 
 #pragma once
 
-#include <limits>
-
 namespace nri {
-
-struct BufferVK;
-struct TextureVK;
 
 struct MemoryVK final : public DebugNameBase {
     inline MemoryVK(DeviceVK& device)

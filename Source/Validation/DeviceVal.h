@@ -4,16 +4,16 @@
 
 namespace nri {
 
-struct QueueVal;
-
 struct IsExtSupported {
-    uint32_t lowLatency   : 1;
-    uint32_t meshShader   : 1;
-    uint32_t rayTracing   : 1;
-    uint32_t swapChain    : 1;
-    uint32_t wrapperD3D11 : 1;
-    uint32_t wrapperD3D12 : 1;
-    uint32_t wrapperVK    : 1;
+    uint32_t lowLatency     : 1;
+    uint32_t meshShader     : 1;
+    uint32_t rayTracing     : 1;
+    uint32_t video          : 1;
+    uint32_t swapChain      : 1;
+    uint32_t wrapperD3D11   : 1;
+    uint32_t wrapperD3D12   : 1;
+    uint32_t wrapperVK      : 1;
+    uint32_t descriptorHeap : 1;
 };
 
 struct DeviceVal final : public DeviceBase {
@@ -36,6 +36,10 @@ struct DeviceVal final : public DeviceBase {
         return m_iHelperImpl;
     }
 
+    inline const DescriptorHeapInterface& GetDescriptorHeapInterfaceImpl() const {
+        return m_iDescriptorHeapImpl;
+    }
+
     inline const LowLatencyInterface& GetLowLatencyInterfaceImpl() const {
         return m_iLowLatencyImpl;
     }
@@ -46,6 +50,10 @@ struct DeviceVal final : public DeviceBase {
 
     inline const RayTracingInterface& GetRayTracingInterfaceImpl() const {
         return m_iRayTracingImpl;
+    }
+
+    inline const VideoInterface& GetVideoInterfaceImpl() const {
+        return m_iVideoImpl;
     }
 
     inline const SwapChainInterface& GetSwapChainInterfaceImpl() const {
@@ -99,12 +107,18 @@ struct DeviceVal final : public DeviceBase {
         return ((DeviceBase&)m_Impl).GetDesc();
     }
 
+    Result ReportDeviceLostInfo(DeviceLostDump& deviceLostDump) override {
+        return ((DeviceBase&)m_Impl).ReportDeviceLostInfo(deviceLostDump);
+    }
+
     void Destruct() override;
     Result FillFunctionTable(CoreInterface& table) const override;
+    Result FillFunctionTable(DescriptorHeapInterface& table) const override;
     Result FillFunctionTable(HelperInterface& table) const override;
     Result FillFunctionTable(LowLatencyInterface& table) const override;
     Result FillFunctionTable(MeshShaderInterface& table) const override;
     Result FillFunctionTable(RayTracingInterface& table) const override;
+    Result FillFunctionTable(VideoInterface& table) const override;
     Result FillFunctionTable(StreamerInterface& table) const override;
     Result FillFunctionTable(SwapChainInterface& table) const override;
     Result FillFunctionTable(UpscalerInterface& table) const override;
@@ -137,6 +151,7 @@ struct DeviceVal final : public DeviceBase {
     Result CreatePipeline(const ComputePipelineDesc& computePipelineDesc, Pipeline*& pipeline);
     Result CreatePipeline(const RayTracingPipelineDesc& rayTracingPipelineDesc, Pipeline*& pipeline);
     Result CreatePipeline(const PipelineVKDesc& pipelineVKDesc, Pipeline*& pipeline);
+    Result CreatePipelineCache(const PipelineCacheDesc& pipelineCacheDesc, PipelineCache*& pipelineCache);
     Result CreateMicromap(const MicromapDesc& micromapDesc, Micromap*& micromap);
     Result CreateQueryPool(const QueryPoolDesc& queryPoolDesc, QueryPool*& queryPool);
     Result CreateQueryPool(const QueryPoolVKDesc& queryPoolVKDesc, QueryPool*& queryPool);
@@ -177,6 +192,7 @@ struct DeviceVal final : public DeviceBase {
     void DestroyBuffer(Buffer* buffer);
     void DestroyTexture(Texture* texture);
     void DestroyPipeline(Pipeline* pipeline);
+    void DestroyPipelineCache(PipelineCache* pipelineCache);
     void DestroyMicromap(Micromap* micromap);
     void DestroyQueryPool(QueryPool* queryPool);
     void DestroySwapChain(SwapChain* swapChain);
@@ -195,7 +211,7 @@ private:
     char* m_Name = nullptr; // .natvis
     DeviceDesc m_Desc = {}; // .natvis
     Device& m_Impl;
-    std::array<QueueVal*, (size_t)QueueType::MAX_NUM> m_Queues = {};
+    UnorderedMap<uint64_t, QueueVal*> m_Queues;
     UnorderedMap<MemoryType, MemoryLocation> m_MemoryTypeMap;
 
     // Validation
@@ -203,10 +219,12 @@ private:
 
     // Implementation
     CoreInterface m_iCoreImpl = {};
+    DescriptorHeapInterface m_iDescriptorHeapImpl = {};
     HelperInterface m_iHelperImpl = {};
     LowLatencyInterface m_iLowLatencyImpl = {};
     MeshShaderInterface m_iMeshShaderImpl = {};
     RayTracingInterface m_iRayTracingImpl = {};
+    VideoInterface m_iVideoImpl = {};
     SwapChainInterface m_iSwapChainImpl = {};
     WrapperD3D11Interface m_iWrapperD3D11Impl = {};
     WrapperD3D12Interface m_iWrapperD3D12Impl = {};

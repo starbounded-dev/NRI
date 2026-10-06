@@ -2,11 +2,7 @@
 
 #pragma once
 
-struct ID3D12Resource;
-
 namespace nri {
-
-struct AccelerationStructureD3D12;
 
 struct TexViewDesc {
     Dim_t layerOffset;
@@ -21,7 +17,8 @@ struct DescriptorD3D12 final : public DebugNameBase {
     }
 
     inline ~DescriptorD3D12() {
-        m_Device.FreeDescriptorHandle(m_Handle);
+        if (m_Handle.IsAllocated())
+            m_Device.FreeDescriptorHandle(m_Handle);
     }
 
     inline DeviceD3D12& GetDevice() const {
@@ -47,6 +44,7 @@ struct DescriptorD3D12 final : public DebugNameBase {
     inline ID3D12Resource* GetResource() const {
         return m_Resource;
     }
+
     inline const TexViewDesc& GetTexViewDesc() const {
         return m_ViewDesc.texture;
     }

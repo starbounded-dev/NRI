@@ -14,6 +14,17 @@ NriEnum(Message, uint8_t,
     ERROR // "wingdi.h" must not be included after
 );
 
+NriEnum(DeviceLostInfoLevel, uint8_t,
+    NONE,
+    BASIC,   // backend-supported basic device lost reporting
+    VERBOSE  // D3D12: additionally enables DRED breadcrumb contexts
+);
+
+NriStruct(DeviceLostDump) {
+    NriOptional const void* data; // opaque backend-specific binary data, NRI-owned and valid until device destruction
+    uint64_t size;                // bytes, 0 if "data" is NULL
+};
+
 // Callbacks must be thread safe
 NriStruct(AllocationCallbacks) {
     void* (NRI_CALL *Allocate)(void* userArg, size_t size, size_t alignment);
@@ -51,9 +62,11 @@ NriStruct(QueueFamilyDesc) {
     Nri(QueueType) queueType;
 };
 
+// D3D12: process-global settings affect all subsequently created D3D12 devices; later NRI device creation does not disable them
 NriStruct(DeviceCreationDesc) {
     Nri(GraphicsAPI) graphicsAPI;
     NriOptional Nri(Robustness) robustness;
+    NriOptional Nri(DeviceLostInfoLevel) deviceLostInfoLevel; // D3D12: process-global
     NriOptional const NriPtr(AdapterDesc) adapterDesc;
     NriOptional Nri(CallbackInterface) callbackInterface;
     NriOptional Nri(AllocationCallbacks) allocationCallbacks;
@@ -72,7 +85,7 @@ NriStruct(DeviceCreationDesc) {
 
     // Switches (disabled by default)
     bool enableNRIValidation;                   // embedded validation layer, checks for NRI specifics
-    bool enableGraphicsAPIValidation;           // GAPI-provided validation layer
+    bool enableGraphicsAPIValidation;           // GAPI-provided validation layer (D3D12: process-global)
     bool enableD3D11CommandBufferEmulation;     // enable? but why? (auto-enabled if deferred contexts are not supported)
     bool enableD3D12RayTracingValidation;       // slow but useful, can only be enabled if envvar "NV_ALLOW_RAYTRACING_VALIDATION" is set to "1"
     bool enableMemoryZeroInitialization;        // page-clears are fast, but memory is not cleared by default in VK
@@ -91,5 +104,8 @@ NRI_API void NRI_CALL nriDestroyDevice(NriPtr(Device) device);
 
 // It's global state for D3D, not needed for VK because validation is tied to the logical device
 NRI_API void NRI_CALL nriReportLiveObjects();
+
+// Reports backend-specific device lost diagnostics and returns a binary dump (if available), "device" must be in a lost state (see "DEVICE_LOST")
+NRI_API Nri(Result) NRI_CALL nriReportDeviceLostInfo(NriRef(Device) device, NriOut NriRef(DeviceLostDump) deviceLostDump);
 
 NriNamespaceEnd

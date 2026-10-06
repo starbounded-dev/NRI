@@ -3,40 +3,69 @@
 #pragma once
 
 #include <d3d12.h>
+#include <d3d12sdklayers.h>
+#include <d3d12video.h>
+#include <dxva.h>
 #include <pix.h>
 
 // Validate Windows SDK version
-static_assert(D3D12_SDK_VERSION >= 4, "Outdated Windows SDK. D3D12 Ultimate needed (SDK 1.4.9+, released 2021.04.20). Always prefer using latest Agility SDK!");
+static_assert(D3D12_SDK_VERSION >= 3, "Outdated Windows SDK. D3D12 Ultimate needed (Windows SDK 10.0.20348). Always prefer using latest Agility SDK!");
 
-// TODO: "D3D12_SDK_VERSION" and "D3D12_PREVIEW_SDK_VERSION" are inconsistent and can't be used to check features support
+// "Must-have" constants and structs
+#ifndef D3D12_RAYTRACING_OPACITY_MICROMAP_ARRAY_BYTE_ALIGNMENT
+#    define D3D12_RAYTRACING_OPACITY_MICROMAP_ARRAY_BYTE_ALIGNMENT 128
 
-#if (NRI_AGILITY_SDK_VERSION_MAJOR >= 618)
-#    define NRI_D3D12_HAS_TIGHT_ALIGNMENT
-#endif
-
-#if (NRI_AGILITY_SDK_VERSION_MAJOR >= 616)
-#    define NRI_D3D12_HAS_OPACITY_MICROMAP
-
-#    ifndef D3D12_RAYTRACING_OPACITY_MICROMAP_ARRAY_BYTE_ALIGNMENT // TODO: remove when fixed
-#        define D3D12_RAYTRACING_OPACITY_MICROMAP_ARRAY_BYTE_ALIGNMENT (128)
-#    endif
-
-#    ifndef D3D12_RAYTRACING_OPACITY_MICROMAP_OC1_MAX_SUBDIVISION_LEVEL // TODO: remove when fixed
-#        define D3D12_RAYTRACING_OPACITY_MICROMAP_OC1_MAX_SUBDIVISION_LEVEL (12)
-#    endif
-#else
 struct D3D12_RAYTRACING_GEOMETRY_OMM_LINKAGE_DESC {
-    uint32_t unused;
+    bool unused;
 };
 
 struct D3D12_RAYTRACING_OPACITY_MICROMAP_HISTOGRAM_ENTRY {
-    uint32_t unused;
+    bool unused;
 };
 #endif
 
+#ifndef D3D12_RAYTRACING_OPACITY_MICROMAP_OC1_MAX_SUBDIVISION_LEVEL
+#    define D3D12_RAYTRACING_OPACITY_MICROMAP_OC1_MAX_SUBDIVISION_LEVEL 12
+#endif
+
+#ifndef D3D12_MS_DISPATCH_MAX_THREAD_GROUPS_PER_GRID
+#    define D3D12_MS_DISPATCH_MAX_THREAD_GROUPS_PER_GRID 4194303
+#endif
+
+#ifndef D3D12_AS_TGSM_BYTES_MINIMUM_SUPPORT
+#    define D3D12_AS_TGSM_BYTES_MINIMUM_SUPPORT 32768
+#endif
+
+#ifndef D3D12_MS_TGSM_BYTES_MINIMUM_SUPPORT
+#    define D3D12_MS_TGSM_BYTES_MINIMUM_SUPPORT 28672
+#endif
+
 #include "SharedExternal.h"
+#include "VideoHelpersD3D12.h"
 
 namespace nri {
+
+struct AccelerationStructureD3D12;
+struct BufferD3D12;
+struct CommandAllocatorD3D12;
+struct CommandBufferD3D12;
+struct DescriptorD3D12;
+struct DescriptorPoolD3D12;
+struct DescriptorSetD3D12;
+struct DescriptorSetMapping;
+struct DeviceD3D12;
+struct FenceD3D12;
+struct MemoryD3D12;
+struct MemoryAllocatorD3D12;
+struct MicromapD3D12;
+struct PipelineCacheD3D12;
+struct PipelineD3D12;
+struct PipelineLayoutD3D12;
+struct QueryPoolD3D12;
+struct QueueD3D12;
+struct SwapChainD3D12;
+struct TextureD3D12;
+struct TransferContextD3D12;
 
 typedef size_t DescriptorHandleCPU;   // D3D12_CPU_DESCRIPTOR_HANDLE
 typedef uint64_t DescriptorHandleGPU; // D3D12_GPU_DESCRIPTOR_HANDLE
@@ -73,15 +102,22 @@ enum DescriptorHeapType : uint8_t {
 struct DescriptorHandle {
     uint32_t heapType : DESCRIPTOR_HANDLE_HEAP_TYPE_BIT_NUM;
     uint32_t heapIndex : DESCRIPTOR_HANDLE_HEAP_INDEX_BIT_NUM;
-    uint32_t heapOffset : DESCRIPTOR_HANDLE_HEAP_OFFSET_BIT_NUM;
+    uint32_t heapOffsetPlusOne : DESCRIPTOR_HANDLE_HEAP_OFFSET_BIT_NUM; // 0 is reserved for an invalid handle
+
+    inline bool IsAllocated() const {
+        return heapOffsetPlusOne != 0;
+    }
 };
 
 constexpr uint32_t DESCRIPTORS_BATCH_SIZE = 1024;
+constexpr uint32_t ROOT_CONSTANT_UNUSED = uint32_t(-1);
+constexpr uint32_t DRED_BREADCRUMB_HISTORY_MAX_NUM = 64 * 1024;
+constexpr uint32_t DRED_BREADCRUMB_RADIUS = 4;
 
 static_assert(D3D12_DESCRIPTOR_HEAP_TYPE_NUM_TYPES <= (1 << DESCRIPTOR_HANDLE_HEAP_TYPE_BIT_NUM), "Out of bounds");
-static_assert(DESCRIPTORS_BATCH_SIZE <= (1 << DESCRIPTOR_HANDLE_HEAP_OFFSET_BIT_NUM), "Out of bounds");
+static_assert(DESCRIPTORS_BATCH_SIZE < (1 << DESCRIPTOR_HANDLE_HEAP_OFFSET_BIT_NUM), "Out of bounds");
 
-struct DescriptorHeapDesc {
+struct DescriptorHeapDescD3D12 {
     ComPtr<ID3D12DescriptorHeap> heap;
     DescriptorHandleGPU baseHandleGPU = 0;
     DescriptorHandleCPU baseHandleCPU = 0;
@@ -92,6 +128,10 @@ struct DescriptorHeapDesc {
 inline uint32_t GetSubresourceIndex(uint32_t layerOffset, uint32_t resourceLayerNum, uint32_t mipOffset, uint32_t resourceMipNum, PlaneBits planes) {
     // https://learn.microsoft.com/en-us/windows/win32/direct3d12/subresources#plane-slice
     uint32_t planeIndex = 0;
+    if ((planes & PlaneBits::PLANE_1) != 0)
+        planeIndex = 1;
+    if ((planes & PlaneBits::PLANE_2) != 0)
+        planeIndex = 2;
     if (planes == PlaneBits::ALL || (planes & PlaneBits::STENCIL) != 0)
         planeIndex = 1;
     if (planes == PlaneBits::ALL || (planes & PlaneBits::DEPTH) != 0) // fallthrough
@@ -102,7 +142,7 @@ inline uint32_t GetSubresourceIndex(uint32_t layerOffset, uint32_t resourceLayer
     return mipOffset + (layerOffset + planeIndex * resourceLayerNum) * resourceMipNum;
 }
 
-void ConvertBotomLevelGeometries(const BottomLevelGeometryDesc* geometries, uint32_t geometryNum,
+void ConvertBottomLevelGeometries(const BottomLevelGeometryDesc* geometries, uint32_t geometryNum,
     D3D12_RAYTRACING_GEOMETRY_DESC* geometryDescs,
     D3D12_RAYTRACING_GEOMETRY_TRIANGLES_DESC* triangleDescs,
     D3D12_RAYTRACING_GEOMETRY_OMM_LINKAGE_DESC* micromapDescs);
@@ -128,7 +168,7 @@ D3D12_CULL_MODE GetCullMode(CullMode cullMode);
 D3D12_STENCIL_OP GetStencilOp(StencilOp stencilFunc);
 UINT8 GetRenderTargetWriteMask(ColorWriteBits colorWriteMask);
 D3D12_LOGIC_OP GetLogicOp(LogicOp logicOp);
-D3D12_BLEND GetBlend(BlendFactor blendFactor);
+D3D12_BLEND GetBlend(BlendFactor blendFactor, bool isAlphaBlend);
 D3D12_BLEND_OP GetBlendOp(BlendOp blendFunc);
 D3D12_DESCRIPTOR_RANGE_TYPE GetDescriptorRangesType(DescriptorType descriptorType);
 D3D12_RESOURCE_DIMENSION GetResourceDimension(TextureType textureType);

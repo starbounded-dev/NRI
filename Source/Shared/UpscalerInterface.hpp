@@ -29,7 +29,7 @@
 #        include "NIS.cs.dxil.h"
 #    endif
 
-#    if NRI_ENABLE_VK_SUPPORT
+#    if (NRI_ENABLE_VK_SUPPORT || NRI_ENABLE_WGPU_SUPPORT)
 #        include "NIS.cs.spirv.h"
 #    endif
 
@@ -55,6 +55,22 @@ struct Nis {
     Dim2_t blockSize = {};
     uint32_t descriptorSetIndex = 0;
 };
+
+static inline const char* GetNisOutputFormatShaderConstant(const DeviceDesc& deviceDesc, Format format) {
+    if (deviceDesc.shaderFeatures.storageWriteWithoutFormat)
+        return "0";
+
+    switch (format) {
+        case Format::RGBA8_UNORM:
+            return "1";
+        case Format::RGBA16_SFLOAT:
+            return "2";
+        case Format::RGBA32_SFLOAT:
+            return "3";
+        default:
+            return nullptr;
+    }
+}
 
 #endif
 
@@ -283,11 +299,8 @@ static void FfxDealloc(void* pUserData, void* pMem) {
 
 #    ifndef NDEBUG
 
-static void FfxDebugMessage(uint32_t, const wchar_t* message) {
-    char s[1024];
-    ConvertWcharToChar(message, s, sizeof(s));
-
-    printf("FFX: %s\n", s);
+static void FfxDebugMessage(uint32_t messageType, const wchar_t* message) {
+    NRI_FFX_DEBUG_LOG(messageType, message);
 }
 
 #    endif
@@ -352,10 +365,11 @@ static inline Result XessConvertError(xess_result_t code) {
 #    include "nvsdk_ngx_helpers.h"
 #    if NRI_ENABLE_VK_SUPPORT
 #        include "nvsdk_ngx_helpers_vk.h"
-#    endif
-#    include "nvsdk_ngx_helpers_dlssd.h"
-#    if NRI_ENABLE_VK_SUPPORT
+
 #        include "nvsdk_ngx_helpers_dlssd_vk.h"
+#    endif
+#    if NRI_ENABLE_D3D11_SUPPORT || NRI_ENABLE_D3D12_SUPPORT
+#        include "nvsdk_ngx_helpers_dlssd_d3d.h"
 #    endif
 
 #    if defined(__GNUC__)
@@ -380,14 +394,7 @@ struct NgxGlobals {
     std::array<RefCounter, 32> refCounters; // awful API borns awful solutions...
     uint32_t refCounterNum = 0;
     Lock lock = {}; // methods in NGX library are NOT thread safe (see the comment in "nvsdk_ngx.h")
-    NriNgxLogSink logSink = nullptr; // install before the first upscaler creation; NGX invokes it from its own threads
-    void* logSinkUserArg = nullptr;
 } g_ngx;
-
-NRI_API void NRI_CALL nriSetNgxLogSink(NriNgxLogSink sink, void* userArg) {
-    g_ngx.logSink = sink;
-    g_ngx.logSinkUserArg = userArg;
-}
 
 static inline int32_t NgxIncrRef(void* deviceNative) {
     uint32_t i = 0;
@@ -419,39 +426,7 @@ static inline int32_t NgxDecrRef(void* deviceNative) {
     return g_ngx.refCounters[i].refCounter;
 }
 
-static void NVSDK_CONV NgxLogCallback(const char* message, NVSDK_NGX_Logging_Level level, NVSDK_NGX_Feature feature) {
-    NriNgxLogSink sink = g_ngx.logSink;
-    if (sink && message)
-        sink(message, (uint32_t)level, (uint32_t)feature, g_ngx.logSinkUserArg);
-}
-
-static inline Result NgxConvertError(NVSDK_NGX_Result code) {
-    if (NVSDK_NGX_SUCCEED(code))
-        return Result::SUCCESS;
-
-    switch (code) {
-        case NVSDK_NGX_Result_FAIL_InvalidParameter:
-        case NVSDK_NGX_Result_FAIL_ScratchBufferTooSmall:
-        case NVSDK_NGX_Result_FAIL_RWFlagMissing:
-        case NVSDK_NGX_Result_FAIL_MissingInput:
-            return Result::INVALID_ARGUMENT;
-
-        case NVSDK_NGX_Result_FAIL_FeatureNotSupported:
-        case NVSDK_NGX_Result_FAIL_UnsupportedInputFormat:
-        case NVSDK_NGX_Result_FAIL_UnsupportedFormat:
-        case NVSDK_NGX_Result_FAIL_UnsupportedParameter:
-        case NVSDK_NGX_Result_FAIL_NotImplemented:
-            return Result::UNSUPPORTED;
-
-        case NVSDK_NGX_Result_FAIL_OutOfDate:
-            return Result::INVALID_SDK;
-
-        case NVSDK_NGX_Result_FAIL_OutOfGPUMemory:
-            return Result::OUT_OF_MEMORY;
-
-        default:
-            return Result::FAILURE;
-    }
+static void NVSDK_CONV NgxLogCallback(const char*, NVSDK_NGX_Logging_Level, NVSDK_NGX_Feature) {
 }
 
 #    if NRI_ENABLE_VK_SUPPORT
@@ -469,12 +444,6 @@ static inline NVSDK_NGX_Resource_VK NgxGetResource(const CoreInterface& NRI, con
 }
 
 #    endif
-#else
-
-// Keep the public log-sink entry point linkable when NRI is built without the NGX SDK.
-NRI_API void NRI_CALL nriSetNgxLogSink(NriNgxLogSink, void*) {
-}
-
 #endif
 
 //=====================================================================================================================================
@@ -484,10 +453,8 @@ bool nri::IsUpscalerSupported(const DeviceDesc& deviceDesc, UpscalerType type) {
     MaybeUnused(deviceDesc, type);
 
 #if NRI_ENABLE_NIS_SDK
-    if (type == UpscalerType::NIS) {
-        if (deviceDesc.graphicsAPI == GraphicsAPI::D3D12 || deviceDesc.graphicsAPI == GraphicsAPI::VK || deviceDesc.graphicsAPI == GraphicsAPI::D3D11)
-            return true;
-    }
+    if (type == UpscalerType::NIS)
+        return true;
 #endif
 
 #if NRI_ENABLE_FFX_SDK
@@ -536,6 +503,7 @@ UpscalerImpl::~UpscalerImpl() {
         ExclusiveScope lock(g_xess.lock);
 
         xess_result_t result = xessDestroyContext(m.xess->context);
+        MaybeUnused(result);
         NRI_CHECK(result == XESS_RESULT_SUCCESS, "xessDestroyContext() failed!");
 
         const auto& allocationCallbacks = ((DeviceBase&)m_Device).GetAllocationCallbacks();
@@ -546,6 +514,7 @@ UpscalerImpl::~UpscalerImpl() {
 #if NRI_ENABLE_FFX_SDK
     if (m_Desc.type == UpscalerType::FSR && m.ffx) {
         ffxReturnCode_t result = m.ffx->DestroyContext(&m.ffx->context, m.ffx->allocationCallbacksPtr);
+        MaybeUnused(result);
         NRI_CHECK(result == FFX_API_RETURN_OK, "ffxDestroyContext() failed!");
 
         UnloadSharedLibrary(*m.ffx->library);
@@ -626,6 +595,10 @@ Result UpscalerImpl::Create(const UpscalerDesc& upscalerDesc) {
 
 #if NRI_ENABLE_NIS_SDK
     if (upscalerDesc.type == UpscalerType::NIS) {
+        const char* outputFormat = GetNisOutputFormatShaderConstant(deviceDesc, upscalerDesc.outputFormat);
+        if (!outputFormat)
+            return Result::UNSUPPORTED;
+
         const auto& allocationCallbacks = ((DeviceBase&)m_Device).GetAllocationCallbacks();
         m.nis = Allocate<Nis>(allocationCallbacks);
 
@@ -672,11 +645,12 @@ Result UpscalerImpl::Create(const UpscalerDesc& upscalerDesc) {
 
         { // Pipeline
             m.nis->blockSize.w = 32;
-            m.nis->blockSize.h = deviceDesc.shaderModel >= 62 ? 32 : 24;
+            m.nis->blockSize.h = deviceDesc.shaderModel >= NriShaderModel(6, 2) ? 32 : 24;
 
-            std::array<ShaderMake::ShaderConstant, 3> defines = {{
-                {"NIS_FP16", (deviceDesc.shaderModel >= 62) ? "1" : "0"},
+            std::array<ShaderMake::ShaderConstant, 4> defines = {{
+                {"NIS_FP16", (deviceDesc.shaderModel >= NriShaderModel(6, 2)) ? "1" : "0"},
                 {"NIS_HDR_MODE", (upscalerDesc.flags & UpscalerBits::HDR) ? "1" : "0"},
+                {"NIS_OUTPUT_FORMAT", outputFormat},
                 {"NIS_THREAD_GROUP_SIZE", (deviceDesc.adapterDesc.vendor == Vendor::NVIDIA) ? "128" : "256"}, // TODO: verify performance
             }};
 
@@ -691,8 +665,8 @@ Result UpscalerImpl::Create(const UpscalerDesc& upscalerDesc) {
             if (deviceDesc.graphicsAPI == GraphicsAPI::D3D12)
                 shaderMakeResult = ShaderMake::FindPermutationInBlob(g_NIS_cs_dxil, GetCountOf(g_NIS_cs_dxil), defines.data(), (uint32_t)defines.size(), &bytecode, &size);
 #    endif
-#    if NRI_ENABLE_VK_SUPPORT
-            if (deviceDesc.graphicsAPI == GraphicsAPI::VK)
+#    if (NRI_ENABLE_VK_SUPPORT || NRI_ENABLE_WGPU_SUPPORT)
+            if (deviceDesc.graphicsAPI == GraphicsAPI::VK || deviceDesc.graphicsAPI == GraphicsAPI::WGPU)
                 shaderMakeResult = ShaderMake::FindPermutationInBlob(g_NIS_cs_spirv, GetCountOf(g_NIS_cs_spirv), defines.data(), (uint32_t)defines.size(), &bytecode, &size);
 #    endif
             if (!shaderMakeResult)
@@ -1018,9 +992,7 @@ Result UpscalerImpl::Create(const UpscalerDesc& upscalerDesc) {
 
             NVSDK_NGX_FeatureCommonInfo featureCommonInfo = {};
             featureCommonInfo.LoggingInfo.LoggingCallback = NgxLogCallback;
-            // With no installed sink stay OFF (NGX spams "stdout" otherwise); an installed
-            // sink receives ON-level messages and owns its own filtering/rate limiting.
-            featureCommonInfo.LoggingInfo.MinimumLoggingLevel = g_ngx.logSink ? NVSDK_NGX_LOGGING_LEVEL_ON : NVSDK_NGX_LOGGING_LEVEL_OFF;
+            featureCommonInfo.LoggingInfo.MinimumLoggingLevel = NVSDK_NGX_LOGGING_LEVEL_OFF; // TODO: NGX spams to "stdout" if not OFF
             featureCommonInfo.LoggingInfo.DisableOtherLoggingSinks = true;
 
 #    if NRI_ENABLE_D3D11_SUPPORT
@@ -1071,58 +1043,41 @@ Result UpscalerImpl::Create(const UpscalerDesc& upscalerDesc) {
         CommandAllocator* commandAllocator = nullptr;
         CommandBuffer* commandBuffer = upscalerDesc.commandBuffer;
         Fence* fence = nullptr;
+        Result result = Result::SUCCESS;
 
         if (!upscalerDesc.commandBuffer) {
-            Result result = m_iCore.GetQueue(m_Device, QueueType::GRAPHICS, 0, graphicsQueue);
-            if (result != Result::SUCCESS)
-                return result;
-
-            result = m_iCore.CreateCommandAllocator(*graphicsQueue, commandAllocator);
-            if (result != Result::SUCCESS)
-                return result;
-
-            result = m_iCore.CreateCommandBuffer(*commandAllocator, commandBuffer);
-            if (result != Result::SUCCESS)
-                return result;
-
-            result = m_iCore.CreateFence(m_Device, 0, fence);
-            if (result != Result::SUCCESS)
-                return result;
-
-            m_iCore.BeginCommandBuffer(*commandBuffer, nullptr);
+            result = m_iCore.GetQueue(m_Device, QueueType::GRAPHICS, 0, graphicsQueue);
+            if (result == Result::SUCCESS)
+                result = m_iCore.CreateCommandAllocator(*graphicsQueue, commandAllocator);
+            if (result == Result::SUCCESS)
+                result = m_iCore.CreateCommandBuffer(*commandAllocator, commandBuffer);
+            if (result == Result::SUCCESS)
+                result = m_iCore.CreateFence(m_Device, 0, fence);
+            if (result == Result::SUCCESS)
+                result = m_iCore.BeginCommandBuffer(*commandBuffer, nullptr);
         }
 
-        { // Record creation commands
+        if (result == Result::SUCCESS) { // Record creation commands
             ExclusiveScope lock(g_ngx.lock);
 
             void* commandBufferNative = m_iCore.GetCommandBufferNativeObject(commandBuffer);
 
-            // DLSR and DLRR expose distinct render-preset keys for every quality mode.
             NVSDK_NGX_PerfQuality_Value qualityValue = NVSDK_NGX_PerfQuality_Value_UltraPerformance;
             if (upscalerDesc.mode == UpscalerMode::NATIVE) {
                 qualityValue = NVSDK_NGX_PerfQuality_Value_DLAA;
                 NVSDK_NGX_Parameter_SetUI(m.ngx->params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA, upscalerDesc.preset);
-                NVSDK_NGX_Parameter_SetUI(m.ngx->params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_DLAA, upscalerDesc.preset);
-            } else if (upscalerDesc.mode == UpscalerMode::ULTRA_QUALITY) {
-                qualityValue = NVSDK_NGX_PerfQuality_Value_UltraQuality;
-                NVSDK_NGX_Parameter_SetUI(m.ngx->params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraQuality, upscalerDesc.preset);
-                NVSDK_NGX_Parameter_SetUI(m.ngx->params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraQuality, upscalerDesc.preset);
-            } else if (upscalerDesc.mode == UpscalerMode::QUALITY) {
+            } else if (upscalerDesc.mode == UpscalerMode::QUALITY || upscalerDesc.mode == UpscalerMode::ULTRA_QUALITY) {
                 qualityValue = NVSDK_NGX_PerfQuality_Value_MaxQuality;
                 NVSDK_NGX_Parameter_SetUI(m.ngx->params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality, upscalerDesc.preset);
-                NVSDK_NGX_Parameter_SetUI(m.ngx->params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Quality, upscalerDesc.preset);
             } else if (upscalerDesc.mode == UpscalerMode::BALANCED) {
                 qualityValue = NVSDK_NGX_PerfQuality_Value_Balanced;
                 NVSDK_NGX_Parameter_SetUI(m.ngx->params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced, upscalerDesc.preset);
-                NVSDK_NGX_Parameter_SetUI(m.ngx->params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Balanced, upscalerDesc.preset);
             } else if (upscalerDesc.mode == UpscalerMode::PERFORMANCE) {
                 qualityValue = NVSDK_NGX_PerfQuality_Value_MaxPerf;
                 NVSDK_NGX_Parameter_SetUI(m.ngx->params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance, upscalerDesc.preset);
-                NVSDK_NGX_Parameter_SetUI(m.ngx->params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Performance, upscalerDesc.preset);
             } else if (upscalerDesc.mode == UpscalerMode::ULTRA_PERFORMANCE) {
                 qualityValue = NVSDK_NGX_PerfQuality_Value_UltraPerformance;
                 NVSDK_NGX_Parameter_SetUI(m.ngx->params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance, upscalerDesc.preset);
-                NVSDK_NGX_Parameter_SetUI(m.ngx->params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraPerformance, upscalerDesc.preset);
             }
 
             int32_t featureCreateFlags = 0;
@@ -1192,27 +1147,39 @@ Result UpscalerImpl::Create(const UpscalerDesc& upscalerDesc) {
         }
 
         if (!upscalerDesc.commandBuffer) {
-            m_iCore.EndCommandBuffer(*commandBuffer);
+            if (result == Result::SUCCESS) {
+                result = m_iCore.EndCommandBuffer(*commandBuffer);
 
-            // Submit & wait for completion
-            FenceSubmitDesc signalFence = {};
-            signalFence.fence = fence;
-            signalFence.value = 1;
+                if (result == Result::SUCCESS) {
+                    // Submit & wait for completion
+                    FenceSubmitDesc signalFence = {};
+                    signalFence.fence = fence;
+                    signalFence.value = 1;
 
-            QueueSubmitDesc queueSubmitDesc = {};
-            queueSubmitDesc.commandBuffers = &commandBuffer;
-            queueSubmitDesc.commandBufferNum = 1;
-            queueSubmitDesc.signalFences = &signalFence;
-            queueSubmitDesc.signalFenceNum = 1;
+                    QueueSubmitDesc queueSubmitDesc = {};
+                    queueSubmitDesc.commandBuffers = &commandBuffer;
+                    queueSubmitDesc.commandBufferNum = 1;
+                    queueSubmitDesc.signalFences = &signalFence;
+                    queueSubmitDesc.signalFenceNum = 1;
 
-            m_iCore.QueueSubmit(*graphicsQueue, queueSubmitDesc); // TODO: DEVICE_LOST?
-            m_iCore.Wait(*fence, 1);
+                    result = m_iCore.QueueSubmit(*graphicsQueue, queueSubmitDesc);
+                }
+
+                if (result == Result::SUCCESS)
+                    m_iCore.Wait(*fence, 1);
+            }
 
             // Cleanup
-            m_iCore.DestroyFence(fence);
-            m_iCore.DestroyCommandBuffer(commandBuffer);
-            m_iCore.DestroyCommandAllocator(commandAllocator);
+            if (fence)
+                m_iCore.DestroyFence(fence);
+            if (commandBuffer)
+                m_iCore.DestroyCommandBuffer(commandBuffer);
+            if (commandAllocator)
+                m_iCore.DestroyCommandAllocator(commandAllocator);
         }
+
+        if (result != Result::SUCCESS)
+            return result;
 
         if (ngxResult != NVSDK_NGX_Result_Success)
             return Result::FAILURE;
@@ -1243,14 +1210,17 @@ void UpscalerImpl::GetUpscalerProps(UpscalerProps& upscalerProps) const {
     upscalerProps.renderResolution.h = (Dim_t)(m_Desc.upscaleResolution.h / scalingFactor + 0.5f);
     upscalerProps.jitterPhaseNum = (uint8_t)std::ceil(8.0f * scalingFactor * scalingFactor);
 
-    if (m_Desc.mode == UpscalerMode::ULTRA_QUALITY || m_Desc.mode == UpscalerMode::QUALITY || m_Desc.mode == UpscalerMode::BALANCED) {
+    if (m_Desc.type == UpscalerType::NIS) {
+        upscalerProps.renderResolutionMin.w = 0;
+        upscalerProps.renderResolutionMin.h = 0;
+    } else if (m_Desc.mode == UpscalerMode::ULTRA_QUALITY || m_Desc.mode == UpscalerMode::QUALITY || m_Desc.mode == UpscalerMode::BALANCED) {
         upscalerProps.renderResolutionMin.w = m_Desc.upscaleResolution.w / 2;
         upscalerProps.renderResolutionMin.h = m_Desc.upscaleResolution.h / 2;
     } else
         upscalerProps.renderResolutionMin = upscalerProps.renderResolution; // no DRS support because of DLSS
 }
 
-Result UpscalerImpl::CmdDispatchUpscale(CommandBuffer& commandBuffer, const DispatchUpscaleDesc& dispatchUpscaleDesc) {
+void UpscalerImpl::CmdDispatchUpscale(CommandBuffer& commandBuffer, const DispatchUpscaleDesc& dispatchUpscaleDesc) {
     const UpscalerResource& output = dispatchUpscaleDesc.output;
     const UpscalerResource& input = dispatchUpscaleDesc.input;
 
@@ -1276,14 +1246,12 @@ Result UpscalerImpl::CmdDispatchUpscale(CommandBuffer& commandBuffer, const Disp
             const TextureDesc& inputDesc = m_iCore.GetTextureDesc(*input.texture);
 
             NIS::Constants constants = {};
-            const bool constantsValid = NIS::UpdateConstants(constants, dispatchUpscaleDesc.settings.nis.sharpness,
+            NIS::UpdateConstants(constants, dispatchUpscaleDesc.settings.nis.sharpness,
                 dispatchUpscaleDesc.currentResolution.w, dispatchUpscaleDesc.currentResolution.h, // render resolution
                 inputDesc.width, inputDesc.height,                                                // input dims
                 m_Desc.upscaleResolution.w, m_Desc.upscaleResolution.h,                           // output resolution
                 m_Desc.upscaleResolution.w, m_Desc.upscaleResolution.h,                           // output dims
                 (m_Desc.flags & UpscalerBits::HDR) ? NIS::HDRMode::Linear : NIS::HDRMode::None);
-            if (!constantsValid)
-                return Result::INVALID_ARGUMENT;
 
             SetRootConstantsDesc rootConstants = {0, &constants, sizeof(constants)};
             m_iCore.CmdSetRootConstants(commandBuffer, rootConstants);
@@ -1300,9 +1268,9 @@ Result UpscalerImpl::CmdDispatchUpscale(CommandBuffer& commandBuffer, const Disp
 
         { // Dispatch
             DispatchDesc dispatchDesc = {};
-            dispatchDesc.x = (m_Desc.upscaleResolution.w + m.nis->blockSize.w - 1) / m.nis->blockSize.w;
-            dispatchDesc.y = (m_Desc.upscaleResolution.h + m.nis->blockSize.h - 1) / m.nis->blockSize.h;
-            dispatchDesc.z = 1;
+            dispatchDesc.workGroupNumX = (m_Desc.upscaleResolution.w + m.nis->blockSize.w - 1) / m.nis->blockSize.w;
+            dispatchDesc.workGroupNumY = (m_Desc.upscaleResolution.h + m.nis->blockSize.h - 1) / m.nis->blockSize.h;
+            dispatchDesc.workGroupNumZ = 1;
 
             m_iCore.CmdDispatch(commandBuffer, dispatchDesc);
         }
@@ -1310,8 +1278,6 @@ Result UpscalerImpl::CmdDispatchUpscale(CommandBuffer& commandBuffer, const Disp
         // Update descriptor set for the next time
         m.nis->descriptorSetIndex++;
         m.nis->descriptorSetIndex %= NIS_DESCRIPTOR_SET_NUM;
-
-        return Result::SUCCESS;
     }
 #endif
 
@@ -1336,15 +1302,19 @@ Result UpscalerImpl::CmdDispatchUpscale(CommandBuffer& commandBuffer, const Disp
         dispatchDesc.frameTimeDelta = dispatchUpscaleDesc.settings.fsr.frameTime;
         dispatchDesc.preExposure = 1.0f;
         dispatchDesc.reset = (dispatchUpscaleDesc.flags & DispatchUpscaleBits::RESET_HISTORY) != 0;
-        dispatchDesc.cameraNear = dispatchUpscaleDesc.settings.fsr.zNear;
-        dispatchDesc.cameraFar = (m_Desc.flags & UpscalerBits::DEPTH_INFINITE) ? FLT_MAX : dispatchUpscaleDesc.settings.fsr.zFar;
+        const float zNear = dispatchUpscaleDesc.settings.fsr.zNear;
+        const float zFar = (m_Desc.flags & UpscalerBits::DEPTH_INFINITE) ? FLT_MAX : dispatchUpscaleDesc.settings.fsr.zFar;
+
+        // FFX swaps camera near and far for inverted depth
+        dispatchDesc.cameraNear = (m_Desc.flags & UpscalerBits::DEPTH_INVERTED) ? zFar : zNear;
+        dispatchDesc.cameraFar = (m_Desc.flags & UpscalerBits::DEPTH_INVERTED) ? zNear : zFar;
         dispatchDesc.cameraFovAngleVertical = dispatchUpscaleDesc.settings.fsr.verticalFov;
         dispatchDesc.viewSpaceToMetersFactor = dispatchUpscaleDesc.settings.fsr.viewSpaceToMetersFactor;
         dispatchDesc.flags = (m_Desc.flags & UpscalerBits::SRGB) ? FFX_UPSCALE_FLAG_NON_LINEAR_COLOR_SRGB : 0;
 
         ffxReturnCode_t result = m.ffx->Dispatch(&m.ffx->context, &dispatchDesc.header);
-
-        return FfxConvertError(result);
+        MaybeUnused(result);
+        NRI_CHECK(result == FFX_API_RETURN_OK, "ffxDispatch() failed!");
     }
 #endif
 
@@ -1369,8 +1339,8 @@ Result UpscalerImpl::CmdDispatchUpscale(CommandBuffer& commandBuffer, const Disp
         ID3D12GraphicsCommandList* commandList = (ID3D12GraphicsCommandList*)m_iCore.GetCommandBufferNativeObject(&commandBuffer);
 
         xess_result_t result = xessD3D12Execute(m.xess->context, commandList, &executeParams);
-
-        return XessConvertError(result);
+        MaybeUnused(result);
+        NRI_CHECK(result == XESS_RESULT_SUCCESS, "xessD3D12Execute() failed!");
     }
 #endif
 
@@ -1459,7 +1429,7 @@ Result UpscalerImpl::CmdDispatchUpscale(CommandBuffer& commandBuffer, const Disp
         }
 #    endif
 
-        return NgxConvertError(result);
+        NRI_CHECK(result == NVSDK_NGX_Result_Success, "DLSR evaluation failed!");
     }
 
     if (m_Desc.type == UpscalerType::DLRR) {
@@ -1478,7 +1448,6 @@ Result UpscalerImpl::CmdDispatchUpscale(CommandBuffer& commandBuffer, const Disp
         uint64_t specularMvOrHitTNative = m_iCore.GetTextureNativeObject(guides.specularMvOrHitT.texture);
         uint64_t exposureNative = m_iCore.GetTextureNativeObject(guides.exposure.texture);
         uint64_t reactiveNative = m_iCore.GetTextureNativeObject(guides.reactive.texture);
-        uint64_t disocclusionNative = m_iCore.GetTextureNativeObject(guides.disocclusion.texture);
         uint64_t sssNative = m_iCore.GetTextureNativeObject(guides.sss.texture);
 
         void* commandBufferNative = m_iCore.GetCommandBufferNativeObject(&commandBuffer);
@@ -1497,7 +1466,6 @@ Result UpscalerImpl::CmdDispatchUpscale(CommandBuffer& commandBuffer, const Disp
             rrEvalParams.pInSpecularAlbedo = (ID3D11Resource*)specularAlbedoNative;
             rrEvalParams.pInExposureTexture = (ID3D11Resource*)exposureNative;
             rrEvalParams.pInBiasCurrentColorMask = (ID3D11Resource*)reactiveNative;
-            rrEvalParams.pInDisocclusionMask = (ID3D11Resource*)disocclusionNative;
             rrEvalParams.pInScreenSpaceSubsurfaceScatteringGuide = (ID3D11Resource*)sssNative;
             rrEvalParams.InJitterOffsetX = dispatchUpscaleDesc.cameraJitter.x;
             rrEvalParams.InJitterOffsetY = dispatchUpscaleDesc.cameraJitter.y;
@@ -1505,7 +1473,6 @@ Result UpscalerImpl::CmdDispatchUpscale(CommandBuffer& commandBuffer, const Disp
             rrEvalParams.InReset = (dispatchUpscaleDesc.flags & DispatchUpscaleBits::RESET_HISTORY) ? true : false;
             rrEvalParams.InMVScaleX = dispatchUpscaleDesc.mvScale.x;
             rrEvalParams.InMVScaleY = dispatchUpscaleDesc.mvScale.y;
-            rrEvalParams.InFrameTimeDeltaInMsec = dispatchUpscaleDesc.settings.dlrr.frameTime;
 
             if (dispatchUpscaleDesc.flags & DispatchUpscaleBits::USE_SPECULAR_MOTION)
                 rrEvalParams.pInMotionVectorsReflections = (ID3D11Resource*)specularMvOrHitTNative;
@@ -1531,7 +1498,6 @@ Result UpscalerImpl::CmdDispatchUpscale(CommandBuffer& commandBuffer, const Disp
             rrEvalParams.pInSpecularAlbedo = (ID3D12Resource*)specularAlbedoNative;
             rrEvalParams.pInExposureTexture = (ID3D12Resource*)exposureNative;
             rrEvalParams.pInBiasCurrentColorMask = (ID3D12Resource*)reactiveNative;
-            rrEvalParams.pInDisocclusionMask = (ID3D12Resource*)disocclusionNative;
             rrEvalParams.pInScreenSpaceSubsurfaceScatteringGuide = (ID3D12Resource*)sssNative;
             rrEvalParams.InJitterOffsetX = dispatchUpscaleDesc.cameraJitter.x;
             rrEvalParams.InJitterOffsetY = dispatchUpscaleDesc.cameraJitter.y;
@@ -1539,7 +1505,6 @@ Result UpscalerImpl::CmdDispatchUpscale(CommandBuffer& commandBuffer, const Disp
             rrEvalParams.InReset = (dispatchUpscaleDesc.flags & DispatchUpscaleBits::RESET_HISTORY) ? true : false;
             rrEvalParams.InMVScaleX = dispatchUpscaleDesc.mvScale.x;
             rrEvalParams.InMVScaleY = dispatchUpscaleDesc.mvScale.y;
-            rrEvalParams.InFrameTimeDeltaInMsec = dispatchUpscaleDesc.settings.dlrr.frameTime;
 
             if (dispatchUpscaleDesc.flags & DispatchUpscaleBits::USE_SPECULAR_MOTION)
                 rrEvalParams.pInMotionVectorsReflections = (ID3D12Resource*)specularMvOrHitTNative;
@@ -1565,7 +1530,6 @@ Result UpscalerImpl::CmdDispatchUpscale(CommandBuffer& commandBuffer, const Disp
             NVSDK_NGX_Resource_VK specularMvOrHitTVk = NgxGetResource(m_iCore, guides.specularMvOrHitT, specularMvOrHitTNative);
             NVSDK_NGX_Resource_VK exposureVk = NgxGetResource(m_iCore, guides.exposure, exposureNative);
             NVSDK_NGX_Resource_VK reactiveVk = NgxGetResource(m_iCore, guides.reactive, reactiveNative);
-            NVSDK_NGX_Resource_VK disocclusionVk = NgxGetResource(m_iCore, guides.disocclusion, disocclusionNative);
             NVSDK_NGX_Resource_VK sssVk = NgxGetResource(m_iCore, guides.sss, sssNative);
 
             NVSDK_NGX_VK_DLSSD_Eval_Params rrEvalParams = {};
@@ -1578,7 +1542,6 @@ Result UpscalerImpl::CmdDispatchUpscale(CommandBuffer& commandBuffer, const Disp
             rrEvalParams.pInSpecularAlbedo = &specularAlbedoVk;
             rrEvalParams.pInExposureTexture = guides.exposure.texture ? &exposureVk : nullptr;
             rrEvalParams.pInBiasCurrentColorMask = guides.reactive.texture ? &reactiveVk : nullptr;
-            rrEvalParams.pInDisocclusionMask = guides.disocclusion.texture ? &disocclusionVk : nullptr;
             rrEvalParams.pInScreenSpaceSubsurfaceScatteringGuide = guides.sss.texture ? &sssVk : nullptr;
             rrEvalParams.InJitterOffsetX = dispatchUpscaleDesc.cameraJitter.x;
             rrEvalParams.InJitterOffsetY = dispatchUpscaleDesc.cameraJitter.y;
@@ -1586,7 +1549,6 @@ Result UpscalerImpl::CmdDispatchUpscale(CommandBuffer& commandBuffer, const Disp
             rrEvalParams.InReset = (dispatchUpscaleDesc.flags & DispatchUpscaleBits::RESET_HISTORY) ? true : false;
             rrEvalParams.InMVScaleX = dispatchUpscaleDesc.mvScale.x;
             rrEvalParams.InMVScaleY = dispatchUpscaleDesc.mvScale.y;
-            rrEvalParams.InFrameTimeDeltaInMsec = dispatchUpscaleDesc.settings.dlrr.frameTime;
 
             if (dispatchUpscaleDesc.flags & DispatchUpscaleBits::USE_SPECULAR_MOTION)
                 rrEvalParams.pInMotionVectorsReflections = &specularMvOrHitTVk;
@@ -1600,9 +1562,7 @@ Result UpscalerImpl::CmdDispatchUpscale(CommandBuffer& commandBuffer, const Disp
         }
 #    endif
 
-        return NgxConvertError(result);
+        NRI_CHECK(result == NVSDK_NGX_Result_Success, "DLRR evaluation failed!");
     }
 #endif
-
-    return Result::UNSUPPORTED;
 }

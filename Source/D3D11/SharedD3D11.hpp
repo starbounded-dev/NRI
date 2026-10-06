@@ -1,5 +1,14 @@
 // © 2021 NVIDIA Corporation
 
+MultiThreadProtection::MultiThreadProtection(DeviceD3D11& device)
+    : device(device) {
+    device.EnterCriticalSection();
+}
+
+MultiThreadProtection::~MultiThreadProtection() {
+    device.LeaveCriticalSection();
+}
+
 static inline D3D11_TEXTURE_ADDRESS_MODE GetAddressMode(AddressMode mode) {
     return (D3D11_TEXTURE_ADDRESS_MODE)(D3D11_TEXTURE_ADDRESS_WRAP + (uint32_t)mode);
 }
@@ -176,7 +185,7 @@ void nri::FillSamplerDesc(const SamplerDesc& samplerDesc, D3D11_SAMPLER_DESC& de
         ? GetFilterAnisotropic(samplerDesc.filters.op, isComparison)
         : GetFilterIsotropic(samplerDesc.filters.mip, samplerDesc.filters.mag, samplerDesc.filters.min, samplerDesc.filters.op, isComparison);
 
-    if (!samplerDesc.isInteger) { // TODO: the spec is not clear about the behavior, keep black
+    if (!samplerDesc.isInteger) {
         desc.BorderColor[0] = samplerDesc.borderColor.f.x;
         desc.BorderColor[1] = samplerDesc.borderColor.f.y;
         desc.BorderColor[2] = samplerDesc.borderColor.f.z;
@@ -198,6 +207,7 @@ bool nri::GetTextureDesc(const TextureD3D11Desc& textureD3D11Desc, TextureDesc& 
         return false;
 
     uint32_t bindFlags = 0;
+    D3D11_USAGE usage = D3D11_USAGE_DEFAULT;
     if (type == D3D11_RESOURCE_DIMENSION_TEXTURE1D) {
         ID3D11Texture1D* texture = (ID3D11Texture1D*)resource;
         D3D11_TEXTURE1D_DESC desc = {};
@@ -213,6 +223,7 @@ bool nri::GetTextureDesc(const TextureD3D11Desc& textureD3D11Desc, TextureDesc& 
         textureDesc.format = DXGIFormatToNRIFormat(desc.Format);
 
         bindFlags = desc.BindFlags;
+        usage = desc.Usage;
     } else if (type == D3D11_RESOURCE_DIMENSION_TEXTURE2D) {
         ID3D11Texture2D* texture = (ID3D11Texture2D*)resource;
         D3D11_TEXTURE2D_DESC desc = {};
@@ -228,6 +239,7 @@ bool nri::GetTextureDesc(const TextureD3D11Desc& textureD3D11Desc, TextureDesc& 
         textureDesc.format = DXGIFormatToNRIFormat(desc.Format);
 
         bindFlags = desc.BindFlags;
+        usage = desc.Usage;
     } else if (type == D3D11_RESOURCE_DIMENSION_TEXTURE3D) {
         ID3D11Texture3D* texture = (ID3D11Texture3D*)resource;
         D3D11_TEXTURE3D_DESC desc = {};
@@ -243,7 +255,11 @@ bool nri::GetTextureDesc(const TextureD3D11Desc& textureD3D11Desc, TextureDesc& 
         textureDesc.format = DXGIFormatToNRIFormat(desc.Format);
 
         bindFlags = desc.BindFlags;
+        usage = desc.Usage;
     }
+
+    if (usage == D3D11_USAGE_DEFAULT)
+        textureDesc.usage |= TextureUsageBits::HOST_TRANSFER;
 
     if (bindFlags & D3D11_BIND_RENDER_TARGET)
         textureDesc.usage |= TextureUsageBits::COLOR_ATTACHMENT;
@@ -281,17 +297,17 @@ bool nri::GetBufferDesc(const BufferD3D11Desc& bufferD3D11Desc, BufferDesc& buff
     bufferDesc.structureStride = desc.StructureByteStride;
 
     if (desc.BindFlags & D3D11_BIND_VERTEX_BUFFER)
-        bufferDesc.usage |= BufferUsageBits::VERTEX_BUFFER;
+        bufferDesc.usage |= BufferUsageBits::VERTEX;
     if (desc.BindFlags & D3D11_BIND_INDEX_BUFFER)
-        bufferDesc.usage |= BufferUsageBits::INDEX_BUFFER;
+        bufferDesc.usage |= BufferUsageBits::INDEX;
     if (desc.BindFlags & D3D11_BIND_CONSTANT_BUFFER)
-        bufferDesc.usage |= BufferUsageBits::CONSTANT_BUFFER;
+        bufferDesc.usage |= BufferUsageBits::CONSTANT;
     if (desc.BindFlags & D3D11_BIND_SHADER_RESOURCE)
         bufferDesc.usage |= BufferUsageBits::SHADER_RESOURCE;
     if (desc.BindFlags & D3D11_BIND_UNORDERED_ACCESS)
         bufferDesc.usage |= BufferUsageBits::SHADER_RESOURCE_STORAGE;
     if (desc.MiscFlags & D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS)
-        bufferDesc.usage |= BufferUsageBits::ARGUMENT_BUFFER;
+        bufferDesc.usage |= BufferUsageBits::ARGUMENT;
 
     return true;
 }

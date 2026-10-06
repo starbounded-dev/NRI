@@ -16,10 +16,12 @@ static const uint64_t NriConstant(SWAPCHAIN_SEMAPHORE) = (uint64_t)(-1);
 // Color space:
 //  - BT.709 - LDR https://en.wikipedia.org/wiki/Rec._709
 //  - BT.2020 - HDR https://en.wikipedia.org/wiki/Rec._2020
+//  - https://registry.khronos.org/DataFormat/specs/1.4/dataformat.1.4.html#PRIMARY_CONVERSION
 // Transfer function:
 //  - G10 - linear (gamma 1.0)
 //  - G22 - sRGB (gamma ~2.2)
 //  - G2084 - SMPTE ST.2084 (Perceptual Quantization)
+//  - https://registry.khronos.org/DataFormat/specs/1.4/dataformat.1.4.html#TRANSFER_CONVERSION
 // Bits per channel:
 //  - 8, 10, 16 (float)
 NriEnum(SwapChainFormat, uint8_t,
@@ -68,12 +70,17 @@ NriStruct(MetalWindow) {    // Expects "APPLE" platform macro
     void* caMetalLayer;     //    CAMetalLayer
 };
 
+NriStruct(AndroidWindow) {  // Expects "__ANDROID__" platform macro
+    void* nativeWindow;     //    ANativeWindow
+};
+
 NriStruct(Window) {
     // Only one entity must be initialized
     Nri(WindowsWindow) windows;
     Nri(X11Window) x11;
     Nri(WaylandWindow) wayland;
     Nri(MetalWindow) metal;
+    Nri(AndroidWindow) android;
 };
 
 // SwapChain textures will be created as "color attachment" resources
@@ -130,8 +137,13 @@ NriStruct(SwapChainInterface) {
 
     // VK only: may return "OUT_OF_DATE", fences must be created with "SWAPCHAIN_SEMAPHORE" initial value
     Nri(Result)             (NRI_CALL *AcquireNextTexture)      (NriRef(SwapChain) swapChain, NriRef(Fence) acquireSemaphore, NriOut NonNriRef(uint32_t) textureIndex);
-    Nri(Result)             (NRI_CALL *WaitForPresent)          (NriRef(SwapChain) swapChain); // call once right before input sampling (must be called starting from the 1st frame)
-    Nri(Result)             (NRI_CALL *QueuePresent)            (NriRef(SwapChain) swapChain, NriRef(Fence) releaseSemaphore);
+
+    // "presentId" must identify a previously queued presentation. Call once immediately before input sampling
+    Nri(Result)             (NRI_CALL *WaitForPresent)          (NriRef(SwapChain) swapChain, uint64_t presentId);
+
+    // A non-zero "presentId" associates the presentation with a tracked frame. Use 0 for an untracked presentation.
+    // Non-zero "presentId" values must strictly increase across frames for each swap chain, i.e. gaps are allowed
+    Nri(Result)             (NRI_CALL *QueuePresent)            (NriRef(SwapChain) swapChain, NriRef(Fence) releaseSemaphore, uint64_t presentId);
 };
 
 /*
@@ -201,7 +213,7 @@ Typical usage example, valid if the number of swap chain images >= queued frames
         NRI.QueueSubmit(queue, queueSubmitDesc);
 
     // Present
-        NRI.QueuePresent(swapChain, *releaseSemaphore);
+        NRI.QueuePresent(swapChain, *releaseSemaphore, 1 + frameIndex);
 */
 
 NriNamespaceEnd

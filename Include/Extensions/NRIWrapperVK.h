@@ -7,6 +7,7 @@
 #define NRI_WRAPPER_VK_H 1
 
 #include "NRIDeviceCreation.h"
+#include "NRIRayTracing.h"
 
 typedef void* VKHandle;
 typedef int32_t VKEnum;
@@ -14,8 +15,6 @@ typedef uint32_t VKFlags;
 typedef uint64_t VKNonDispatchableHandle;
 
 NriNamespaceBegin
-
-NriForwardStruct(AccelerationStructure);
 
 // A collection of queues of the same type
 NriStruct(QueueFamilyVKDesc) {
@@ -122,6 +121,7 @@ NriStruct(WrapperVKInterface) {
     Nri(Result) (NRI_CALL *CreateQueryPoolVK)               (NriRef(Device) device, const NriRef(QueryPoolVKDesc) queryPoolVKDesc, NriOut NriRef(QueryPool*) queryPool);
     Nri(Result) (NRI_CALL *CreateFenceVK)                   (NriRef(Device) device, const NriRef(FenceVKDesc) fenceVKDesc, NriOut NriRef(Fence*) fence);
     Nri(Result) (NRI_CALL *CreateAccelerationStructureVK)   (NriRef(Device) device, const NriRef(AccelerationStructureVKDesc) accelerationStructureVKDesc, NriOut NriRef(AccelerationStructure*) accelerationStructure);
+    // TODO-VIDEO: add CreateVideoSession
 
     uint32_t    (NRI_CALL *GetQueueFamilyIndexVK)           (const NriRef(Queue) queue);
     VKHandle    (NRI_CALL *GetPhysicalDeviceVK)             (const NriRef(Device) device);

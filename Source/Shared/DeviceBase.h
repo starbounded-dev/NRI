@@ -69,7 +69,17 @@ struct DeviceBase : public DebugNameBaseVal {
     virtual ~DeviceBase() {
     }
 
+    virtual Result ReportDeviceLostInfo(DeviceLostDump& deviceLostDump) {
+        deviceLostDump = {};
+
+        return Result::UNSUPPORTED;
+    }
+
     virtual Result FillFunctionTable(CoreInterface&) const {
+        return Result::UNSUPPORTED;
+    }
+
+    virtual Result FillFunctionTable(DescriptorHeapInterface&) const {
         return Result::UNSUPPORTED;
     }
 
@@ -90,6 +100,10 @@ struct DeviceBase : public DebugNameBaseVal {
     }
 
     virtual Result FillFunctionTable(RayTracingInterface&) const {
+        return Result::UNSUPPORTED;
+    }
+
+    virtual Result FillFunctionTable(VideoInterface&) const {
         return Result::UNSUPPORTED;
     }
 
@@ -129,9 +143,9 @@ protected:
 template <typename T>
 inline void Destroy(T* object) {
     if (object) {
+        // FIXED BY AI: Preserve callbacks before destruction invalidates device-backed references.
+        const AllocationCallbacks allocationCallbacks = ((DeviceBase&)(object->GetDevice())).GetAllocationCallbacks();
         object->~T();
-
-        const auto& allocationCallbacks = ((DeviceBase&)(object->GetDevice())).GetAllocationCallbacks();
         allocationCallbacks.Free(allocationCallbacks.userArg, object);
     }
 }

@@ -2,23 +2,17 @@
 
 #pragma once
 
-struct ID3D12CommandAllocator;
-struct ID3D12Resource;
-
 #if NRI_ENABLE_AGILITY_SDK_SUPPORT
-struct ID3D12GraphicsCommandList10;
 typedef ID3D12GraphicsCommandList10 ID3D12GraphicsCommandListBest;
+typedef ID3D12VideoDecodeCommandList3 ID3D12VideoDecodeCommandListBest;
+typedef ID3D12VideoEncodeCommandList4 ID3D12VideoEncodeCommandListBest;
 #else
-struct ID3D12GraphicsCommandList6;
 typedef ID3D12GraphicsCommandList6 ID3D12GraphicsCommandListBest;
+typedef ID3D12VideoDecodeCommandList2 ID3D12VideoDecodeCommandListBest;
+typedef ID3D12VideoEncodeCommandList ID3D12VideoEncodeCommandListBest;
 #endif
 
 namespace nri {
-
-struct PipelineD3D12;
-struct PipelineLayoutD3D12;
-struct DescriptorSetD3D12;
-struct DescriptorD3D12;
 
 struct AttachmentDescD3D12 {
     DescriptorD3D12* attachment;
@@ -34,8 +28,8 @@ struct CommandBufferD3D12 final : public DebugNameBase {
     inline ~CommandBufferD3D12() {
     }
 
-    inline operator ID3D12GraphicsCommandList*() const {
-        return m_GraphicsCommandList.GetInterface();
+    inline operator ID3D12CommandList*() const {
+        return m_CommandList.GetInterface();
     }
 
     inline DeviceD3D12& GetDevice() const {
@@ -54,6 +48,27 @@ struct CommandBufferD3D12 final : public DebugNameBase {
         m_RenderTargetNum = 0;
     }
 
+    inline ID3D12GraphicsCommandListBest* GetGraphicsCommandList() const {
+        NRI_CHECK(m_CommandListType == D3D12_COMMAND_LIST_TYPE_DIRECT
+                || m_CommandListType == D3D12_COMMAND_LIST_TYPE_COMPUTE
+                || m_CommandListType == D3D12_COMMAND_LIST_TYPE_COPY,
+            "Unexpected");
+
+        return static_cast<ID3D12GraphicsCommandListBest*>(m_CommandList.GetInterface());
+    }
+
+    inline ID3D12VideoDecodeCommandListBest* GetVideoDecodeCommandList() const {
+        NRI_CHECK(m_CommandListType == D3D12_COMMAND_LIST_TYPE_VIDEO_DECODE, "Unexpected");
+
+        return static_cast<ID3D12VideoDecodeCommandListBest*>(m_CommandList.GetInterface());
+    }
+
+    inline ID3D12VideoEncodeCommandListBest* GetVideoEncodeCommandList() const {
+        NRI_CHECK(m_CommandListType == D3D12_COMMAND_LIST_TYPE_VIDEO_ENCODE, "Unexpected");
+
+        return static_cast<ID3D12VideoEncodeCommandListBest*>(m_CommandList.GetInterface());
+    }
+
     Result Create(D3D12_COMMAND_LIST_TYPE commandListType, ID3D12CommandAllocator* commandAllocator);
     Result Create(const CommandBufferD3D12Desc& commandBufferD3D12Desc);
 
@@ -61,9 +76,7 @@ struct CommandBufferD3D12 final : public DebugNameBase {
     // DebugNameBase
     //================================================================================================================
 
-    void SetDebugName(const char* name) NRI_DEBUG_NAME_OVERRIDE {
-        NRI_SET_D3D_DEBUG_OBJECT_NAME(m_GraphicsCommandList, name);
-    }
+    void SetDebugName(const char* name) NRI_DEBUG_NAME_OVERRIDE;
 
     //================================================================================================================
     // NRI
@@ -116,17 +129,20 @@ struct CommandBufferD3D12 final : public DebugNameBase {
     void BuildMicromaps(const BuildMicromapDesc* buildMicromapDescs, uint32_t buildMicromapDescNum);
     void CopyAccelerationStructure(AccelerationStructure& dst, const AccelerationStructure& src, CopyMode copyMode);
     void CopyMicromap(Micromap& dst, const Micromap& src, CopyMode copyMode);
-    void WriteAccelerationStructuresSizes(const AccelerationStructure* const* accelerationStructures, uint32_t accelerationStructureNum, QueryPool& queryPool, uint32_t queryPoolOffset);
-    void WriteMicromapsSizes(const Micromap* const* micromaps, uint32_t micromapNum, QueryPool& queryPool, uint32_t queryPoolOffset);
+    void WriteAccelerationStructureSizes(const AccelerationStructure* const* accelerationStructures, uint32_t accelerationStructureNum, QueryPool& queryPool, uint32_t queryPoolOffset);
+    void WriteMicromapSizes(const Micromap* const* micromaps, uint32_t micromapNum, QueryPool& queryPool, uint32_t queryPoolOffset);
     void DispatchRays(const DispatchRaysDesc& dispatchRaysDesc);
     void DispatchRaysIndirect(const Buffer& buffer, uint64_t offset);
     void DrawMeshTasks(const DrawMeshTasksDesc& drawMeshTasksDesc);
     void DrawMeshTasksIndirect(const Buffer& buffer, uint64_t offset, uint32_t drawNum, uint32_t stride, const Buffer* countBuffer, uint64_t countBufferOffset);
+    void DecodeVideo(const VideoDecodeDesc& videoDecodeDesc);
+    void EncodeVideo(const VideoEncodeDesc& videoEncodeDesc);
 
 private:
     DeviceD3D12& m_Device;
     ComPtr<ID3D12CommandAllocator> m_CommandAllocator;
-    ComPtr<ID3D12GraphicsCommandListBest> m_GraphicsCommandList;
+    ComPtr<ID3D12CommandList> m_CommandList;
+    D3D12_COMMAND_LIST_TYPE m_CommandListType = D3D12_COMMAND_LIST_TYPE_DIRECT;
     std::array<DescriptorSetD3D12*, ROOT_SIGNATURE_DWORD_NUM> m_DescriptorSets = {}; // TODO: needed only for "ClearStorage"
     std::array<AttachmentDescD3D12, D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT> m_RenderTargets = {};
     AttachmentDescD3D12 m_Depth = {};

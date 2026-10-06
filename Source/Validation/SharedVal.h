@@ -4,9 +4,41 @@
 
 #include "SharedExternal.h"
 
-#include "DeviceVal.h"
-
 #define NRI_OBJECT_SIGNATURE 0x1234567887654321ull // TODO: 32-bit platform support? not needed, I believe
+
+#define NRI_GET_IMPL(className, object) (object ? ((className##Val*)object)->GetImpl() : nullptr)
+
+namespace nri {
+
+struct AccelerationStructureVal;
+struct BufferVal;
+struct CommandAllocatorVal;
+struct CommandBufferVal;
+struct DescriptorPoolVal;
+struct DescriptorHeapVal;
+struct DescriptorSetVal;
+struct DescriptorVal;
+struct DeviceVal;
+struct FenceVal;
+struct MemoryVal;
+struct MicromapVal;
+struct PipelineCacheVal;
+struct PipelineLayoutVal;
+struct PipelineVal;
+struct QueryPoolVal;
+struct QueueVal;
+struct SwapChainVal;
+struct TextureVal;
+struct VideoSessionVal;
+
+uint64_t GetMemorySizeD3D12(const MemoryD3D12Desc& memoryD3D12Desc);
+QueryType GetQueryTypeVK(uint32_t queryTypeVK);
+const char* GetDescriptorTypeName(DescriptorType descriptorType);
+void ConvertBottomLevelGeometries(const BottomLevelGeometryDesc* geometries, uint32_t geometryNum, BottomLevelGeometryDesc*& outGeometries, BottomLevelTrianglesMicromapDesc*& outMicromaps);
+
+} // namespace nri
+
+#include "DeviceVal.h"
 
 namespace nri {
 
@@ -51,6 +83,10 @@ struct ObjectVal : public DebugNameBaseVal {
         return m_Device.GetRayTracingInterfaceImpl();
     }
 
+    inline const VideoInterface& GetVideoInterfaceImpl() const {
+        return m_Device.GetVideoInterfaceImpl();
+    }
+
     inline const SwapChainInterface& GetSwapChainInterfaceImpl() const {
         return m_Device.GetSwapChainInterfaceImpl();
     }
@@ -92,35 +128,9 @@ protected:
     DeviceVal& m_Device;
 };
 
-#define NRI_GET_IMPL(className, object) (object ? ((className##Val*)object)->GetImpl() : nullptr)
-
 template <typename T>
 inline DeviceVal& GetDeviceVal(T& object) {
     return ((ObjectVal&)object).GetDevice();
 }
-
-uint64_t GetMemorySizeD3D12(const MemoryD3D12Desc& memoryD3D12Desc);
-
-constexpr std::array<const char*, (size_t)DescriptorType::MAX_NUM> g_descriptorTypeNames = {
-    "SAMPLER",                      // SAMPLER
-    "MUTABLE",                      // MUTABLE
-    "TEXTURE",                      // TEXTURE
-    "STORAGE_TEXTURE",              // STORAGE_TEXTURE
-    "INPUT_ATTACHMENT",             // INPUT_ATTACHMENT
-    "BUFFER",                       // BUFFER
-    "STORAGE_BUFFER",               // STORAGE_BUFFER
-    "CONSTANT_BUFFER",              // CONSTANT_BUFFER
-    "STRUCTURED_BUFFER",            // STRUCTURED_BUFFER
-    "STORAGE_STRUCTURED_BUFFER",    // STORAGE_STRUCTURED_BUFFER
-    "ACCELERATION_STRUCTURE",       // ACCELERATION_STRUCTURE
-};
-NRI_VALIDATE_ARRAY_BY_PTR(g_descriptorTypeNames);
-
-constexpr const char* GetDescriptorTypeName(DescriptorType descriptorType) {
-    return g_descriptorTypeNames[(uint32_t)descriptorType];
-}
-
-void ConvertBotomLevelGeometries(const BottomLevelGeometryDesc* geometries, uint32_t geometryNum, BottomLevelGeometryDesc*& outGeometries, BottomLevelMicromapDesc*& outMicromaps);
-QueryType GetQueryTypeVK(uint32_t queryTypeVK);
 
 } // namespace nri

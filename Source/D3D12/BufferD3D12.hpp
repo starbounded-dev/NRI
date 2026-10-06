@@ -33,35 +33,38 @@ Result BufferD3D12::Allocate(MemoryLocation memoryLocation, float priority, bool
     allocationDesc.Flags = (D3D12MA::ALLOCATION_FLAGS)flags;
     allocationDesc.ExtraHeapFlags = heapFlags;
 
-#if NRI_ENABLE_AGILITY_SDK_SUPPORT
     D3D12_RESOURCE_DESC1 desc1 = {};
-    m_Device.GetResourceDesc(m_Desc, (D3D12_RESOURCE_DESC&)desc1);
+    m_Device.GetResourceDesc(m_Desc, desc1);
 
+#if NRI_ENABLE_AGILITY_SDK_SUPPORT
     const D3D12_BARRIER_LAYOUT initialLayout = D3D12_BARRIER_LAYOUT_UNDEFINED;
+    // D3D12 validation rejects video buffers created with "CreateResource3" when they are passed to video encode/decode APIs.
+    // Keep video buffers on the legacy resource-state creation path; ordinary buffers still use enhanced barriers.
+    const bool useEnhancedBarriers = m_Device.GetVersion() >= 10 && m_Device.GetDesc().features.enhancedBarriers && !(m_Desc.usage & (BufferUsageBits::VIDEO_DECODE | BufferUsageBits::VIDEO_ENCODE));
 
-    HRESULT hr = m_Device.GetVma()->CreateResource3(&allocationDesc, &desc1, initialLayout, nullptr, NO_CASTABLE_FORMATS, &m_VmaAllocation, IID_PPV_ARGS(&m_Buffer));
-    NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "D3D12MA::CreateResource3");
-#else
-    D3D12_RESOURCE_DESC desc = {};
-    m_Device.GetResourceDesc(m_Desc, desc);
-
-    D3D12_RESOURCE_STATES initialState = D3D12_RESOURCE_STATE_COMMON;
-    if (memoryLocation == MemoryLocation::HOST_UPLOAD || memoryLocation == MemoryLocation::DEVICE_UPLOAD)
-        initialState |= D3D12_RESOURCE_STATE_GENERIC_READ;
-    else if (memoryLocation == MemoryLocation::HOST_READBACK)
-        initialState |= D3D12_RESOURCE_STATE_COPY_DEST;
-
-    if (m_Desc.usage & BufferUsageBits::ACCELERATION_STRUCTURE_STORAGE)
-        initialState |= D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE;
-
-    HRESULT hr = m_Device.GetVma()->CreateResource(&allocationDesc, &desc, initialState, nullptr, &m_VmaAllocation, IID_PPV_ARGS(&m_Buffer));
-    NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "D3D12MA::CreateResource");
+    if (useEnhancedBarriers) {
+        HRESULT hr = m_Device.GetVma()->CreateResource3(&allocationDesc, &desc1, initialLayout, nullptr, NO_CASTABLE_FORMATS, &m_VmaAllocation, IID_PPV_ARGS(&m_Buffer));
+        NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "D3D12MA::CreateResource3");
+    } else
 #endif
+    {
+        D3D12_RESOURCE_STATES initialState = D3D12_RESOURCE_STATE_COMMON;
+        if (memoryLocation == MemoryLocation::HOST_UPLOAD || memoryLocation == MemoryLocation::DEVICE_UPLOAD)
+            initialState |= D3D12_RESOURCE_STATE_GENERIC_READ;
+        else if (memoryLocation == MemoryLocation::HOST_READBACK)
+            initialState |= D3D12_RESOURCE_STATE_COPY_DEST;
+
+        if (m_Desc.usage & BufferUsageBits::ACCELERATION_STRUCTURE_STORAGE)
+            initialState |= D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE;
+
+        HRESULT hr = m_Device.GetVma()->CreateResource2(&allocationDesc, &desc1, initialState, nullptr, &m_VmaAllocation, IID_PPV_ARGS(&m_Buffer));
+        NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "D3D12MA::CreateResource");
+    }
 
     D3D12_HEAP_PROPERTIES heapProps = {};
     heapProps.Type = allocationDesc.HeapType;
 
-    return SetPriorityAndPersistentlyMap(priority, heapProps);
+    return SetPriorityAndPersistentlyMap(priority, committed, heapProps);
 }
 
 Result BufferD3D12::BindMemory(const MemoryD3D12& memory, uint64_t offset) {
@@ -76,56 +79,63 @@ Result BufferD3D12::BindMemory(const MemoryD3D12& memory, uint64_t offset) {
 
     offset += memory.GetOffset();
 
-#if NRI_ENABLE_AGILITY_SDK_SUPPORT
     D3D12_RESOURCE_DESC1 desc1 = {};
-    m_Device.GetResourceDesc(m_Desc, (D3D12_RESOURCE_DESC&)desc1);
+    m_Device.GetResourceDesc(m_Desc, desc1);
 
+    bool isCommitted = memory.IsDummy();
+
+#if NRI_ENABLE_AGILITY_SDK_SUPPORT
     const D3D12_BARRIER_LAYOUT initialLayout = D3D12_BARRIER_LAYOUT_UNDEFINED;
+    // D3D12 validation rejects video buffers created with "CreateResource3" when they are passed to video encode/decode APIs.
+    // Keep video buffers on the legacy resource-state creation path; ordinary buffers still use enhanced barriers.
+    const bool useEnhancedBarriers = m_Device.GetVersion() >= 10 && m_Device.GetDesc().features.enhancedBarriers && !(m_Desc.usage & (BufferUsageBits::VIDEO_DECODE | BufferUsageBits::VIDEO_ENCODE));
 
-    if (memory.IsDummy()) {
-        HRESULT hr = m_Device->CreateCommittedResource3(&heapDesc.Properties, heapFlagsFixed, &desc1, initialLayout, nullptr, nullptr, NO_CASTABLE_FORMATS, IID_PPV_ARGS(&m_Buffer));
-        NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D12Device10::CreateCommittedResource3");
-    } else {
-        HRESULT hr = m_Device->CreatePlacedResource2(memory, offset, &desc1, initialLayout, nullptr, NO_CASTABLE_FORMATS, IID_PPV_ARGS(&m_Buffer));
-        NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D12Device10::CreatePlacedResource2");
-    }
-#else
-    bool isUpload = heapDesc.Properties.Type == D3D12_HEAP_TYPE_UPLOAD
-#    if NRI_ENABLE_AGILITY_SDK_SUPPORT
-        || heapDesc.Properties.Type == D3D12_HEAP_TYPE_GPU_UPLOAD
-#    endif
-        || (heapDesc.Properties.Type == D3D12_HEAP_TYPE_CUSTOM && heapDesc.Properties.CPUPageProperty == D3D12_CPU_PAGE_PROPERTY_WRITE_COMBINE);
-
-    bool isReadback = heapDesc.Properties.Type == D3D12_HEAP_TYPE_READBACK
-        || (heapDesc.Properties.Type == D3D12_HEAP_TYPE_CUSTOM && heapDesc.Properties.CPUPageProperty == D3D12_CPU_PAGE_PROPERTY_WRITE_BACK);
-
-    D3D12_RESOURCE_DESC desc = {};
-    m_Device.GetResourceDesc(m_Desc, desc);
-
-    D3D12_RESOURCE_STATES initialState = D3D12_RESOURCE_STATE_COMMON;
-    if (isUpload)
-        initialState |= D3D12_RESOURCE_STATE_GENERIC_READ;
-    else if (isReadback)
-        initialState |= D3D12_RESOURCE_STATE_COPY_DEST;
-
-    if (m_Desc.usage & BufferUsageBits::ACCELERATION_STRUCTURE_STORAGE)
-        initialState |= D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE;
-
-    if (memory.IsDummy()) {
-        HRESULT hr = m_Device->CreateCommittedResource(&heapDesc.Properties, heapFlagsFixed, &desc, initialState, nullptr, IID_PPV_ARGS(&m_Buffer));
-        NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D12Device::CreateCommittedResource");
-    } else {
-        HRESULT hr = m_Device->CreatePlacedResource(memory, offset, &desc, initialState, nullptr, IID_PPV_ARGS(&m_Buffer));
-        NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D12Device::CreatePlacedResource");
-    }
+    if (useEnhancedBarriers) {
+        if (isCommitted) {
+            HRESULT hr = m_Device->CreateCommittedResource3(&heapDesc.Properties, heapFlagsFixed, &desc1, initialLayout, nullptr, nullptr, NO_CASTABLE_FORMATS, IID_PPV_ARGS(&m_Buffer));
+            NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D12Device10::CreateCommittedResource3");
+        } else {
+            HRESULT hr = m_Device->CreatePlacedResource2(memory, offset, &desc1, initialLayout, nullptr, NO_CASTABLE_FORMATS, IID_PPV_ARGS(&m_Buffer));
+            NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D12Device10::CreatePlacedResource2");
+        }
+    } else
 #endif
-    return SetPriorityAndPersistentlyMap(memory.GetPriority(), heapDesc.Properties);
+    {
+        D3D12_RESOURCE_STATES initialState = D3D12_RESOURCE_STATE_COMMON;
+
+        bool isUpload = heapDesc.Properties.Type == D3D12_HEAP_TYPE_UPLOAD
+#if NRI_ENABLE_AGILITY_SDK_SUPPORT
+            || heapDesc.Properties.Type == D3D12_HEAP_TYPE_GPU_UPLOAD
+#endif
+            || (heapDesc.Properties.Type == D3D12_HEAP_TYPE_CUSTOM && heapDesc.Properties.CPUPageProperty == D3D12_CPU_PAGE_PROPERTY_WRITE_COMBINE);
+
+        bool isReadback = heapDesc.Properties.Type == D3D12_HEAP_TYPE_READBACK
+            || (heapDesc.Properties.Type == D3D12_HEAP_TYPE_CUSTOM && heapDesc.Properties.CPUPageProperty == D3D12_CPU_PAGE_PROPERTY_WRITE_BACK);
+
+        if (isUpload)
+            initialState |= D3D12_RESOURCE_STATE_GENERIC_READ;
+        else if (isReadback)
+            initialState |= D3D12_RESOURCE_STATE_COPY_DEST;
+
+        if (m_Desc.usage & BufferUsageBits::ACCELERATION_STRUCTURE_STORAGE)
+            initialState |= D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE;
+
+        if (isCommitted) {
+            HRESULT hr = m_Device->CreateCommittedResource2(&heapDesc.Properties, heapFlagsFixed, &desc1, initialState, nullptr, nullptr, IID_PPV_ARGS(&m_Buffer));
+            NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D12Device8::CreateCommittedResource2");
+        } else {
+            HRESULT hr = m_Device->CreatePlacedResource1(memory, offset, &desc1, initialState, nullptr, IID_PPV_ARGS(&m_Buffer));
+            NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D12Device8::CreatePlacedResource1");
+        }
+    }
+
+    return SetPriorityAndPersistentlyMap(memory.GetPriority(), isCommitted, heapDesc.Properties);
 }
 
-NRI_INLINE Result BufferD3D12::SetPriorityAndPersistentlyMap(float priority, const D3D12_HEAP_PROPERTIES& heapProps) {
+NRI_INLINE Result BufferD3D12::SetPriorityAndPersistentlyMap(float priority, bool committed, const D3D12_HEAP_PROPERTIES& heapProps) {
     // Priority
     D3D12_RESIDENCY_PRIORITY residencyPriority = (D3D12_RESIDENCY_PRIORITY)ConvertPriority(priority);
-    if (residencyPriority != 0) {
+    if (residencyPriority != 0 && committed) {
         ID3D12Pageable* obj = m_Buffer.GetInterface();
         HRESULT hr = m_Device->SetResidencyPriority(1, &obj, &residencyPriority);
         NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D12Device1::SetResidencyPriority");

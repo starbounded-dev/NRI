@@ -1,4 +1,4 @@
-﻿// © 2021 NVIDIA Corporation
+// © 2021 NVIDIA Corporation
 
 #pragma once
 
@@ -8,6 +8,7 @@
 #include <numeric>   // lcm
 
 #include <array>
+#include <limits>
 #include <map>
 #include <string>
 #include <unordered_map>
@@ -27,6 +28,7 @@ typedef uint32_t DXGI_FORMAT;
 #include "NRI.h"
 #include "NRI.hlsl"
 
+#include "Extensions/NRIDescriptorHeap.h"
 #include "Extensions/NRIDeviceCreation.h"
 #include "Extensions/NRIHelper.h"
 #include "Extensions/NRIImgui.h"
@@ -36,11 +38,123 @@ typedef uint32_t DXGI_FORMAT;
 #include "Extensions/NRIStreamer.h"
 #include "Extensions/NRISwapChain.h"
 #include "Extensions/NRIUpscaler.h"
+#include "Extensions/NRIVideo.h"
 #include "Extensions/NRIWrapperD3D11.h"
 #include "Extensions/NRIWrapperD3D12.h"
 #include "Extensions/NRIWrapperVK.h"
 
 #include "Lock.h"
+#include "SharedVideo.h"
+
+// NRI default settings (if not provided in "NRIConfig.h")
+#ifdef NRI_USER_CONFIG
+#    include NRI_USER_CONFIG
+#else
+#    include "../NRIConfig.h"
+#endif
+
+#ifndef NRI_TIMEOUT_PRESENT
+#    define NRI_TIMEOUT_PRESENT 1000u // 1 sec
+#endif
+
+#ifndef NRI_TIMEOUT_FENCE
+#    define NRI_TIMEOUT_FENCE 5000u // 5 sec
+#endif
+
+#ifndef NRI_MAX_MESSAGE_LENGTH
+#    define NRI_MAX_MESSAGE_LENGTH 2048u // 2 Kb
+#endif
+
+#ifndef NRI_ZERO_BUFFER_SIZE
+#    define NRI_ZERO_BUFFER_SIZE 4194304u // 4 Mb
+#endif
+
+#ifndef NRI_MAX_STACK_ALLOC_SIZE
+#    define NRI_MAX_STACK_ALLOC_SIZE 32768u // 32 Kb
+#endif
+
+#ifndef NRI_FILE_SEPARATOR
+#    ifdef _WIN32
+#        define NRI_FILE_SEPARATOR '\\'
+#    else
+#        define NRI_FILE_SEPARATOR '/'
+#    endif
+#endif
+
+#ifndef NRI_CHECK
+#    ifdef NDEBUG
+#        define NRI_CHECK(condition, message)
+#    else
+#        define NRI_CHECK(condition, message) assert((condition) && message)
+#    endif
+#endif
+
+#ifndef NRI_INLINE
+#    define NRI_INLINE inline
+#endif
+
+// FFX default settings (if not provided in "NRIConfig.h")
+#ifndef NRI_FFX_DEBUG_LOG
+#    define NRI_FFX_DEBUG_LOG(messageType, message) \
+        do { \
+            MaybeUnused(messageType); \
+            wprintf(L"FFX: %ls\n", message); \
+        } while (false)
+#endif
+
+// D3D12MA default settings (if not provided in "NRIConfig.h")
+#ifndef D3D12MA_DEBUG_LOG
+#    define D3D12MA_DEBUG_LOG(format, ...) \
+        do { \
+            wprintf(format, __VA_ARGS__); \
+            wprintf(L"\n"); \
+        } while (false)
+#endif
+
+#ifndef D3D12MA_DEFAULT_BLOCK_SIZE
+#    define D3D12MA_DEFAULT_BLOCK_SIZE 67108864u // 64 Mb
+#endif
+
+#ifndef D3D12MA_ASSERT
+#    define D3D12MA_ASSERT(cond) NRI_CHECK(cond, "D3D12MA assert failed!")
+#endif
+
+#ifndef D3D12MA_HEAVY_ASSERT
+#    define D3D12MA_HEAVY_ASSERT(expr)
+#endif
+
+// VMA default settings (if not provided in "NRIConfig.h")
+#ifndef VMA_DEBUG_LOG_FORMAT
+#    define VMA_DEBUG_LOG_FORMAT(format, ...) \
+        do { \
+            printf((format), __VA_ARGS__); \
+            printf("\n"); \
+        } while (false)
+#endif
+
+#ifndef VMA_DEFAULT_LARGE_HEAP_BLOCK_SIZE
+#    define VMA_DEFAULT_LARGE_HEAP_BLOCK_SIZE 67108864u // 64 Mb
+#endif
+
+#ifndef VMA_ASSERT
+#    define VMA_ASSERT(expr) NRI_CHECK(expr, "VMA assert failed!")
+#endif
+
+#ifndef VMA_ASSERT_LEAK
+#    define VMA_ASSERT_LEAK(expr) VMA_ASSERT(expr)
+#endif
+
+#ifndef VMA_DEBUG_LOG
+#    define VMA_DEBUG_LOG(str) VMA_DEBUG_LOG_FORMAT("%s", (str))
+#endif
+
+#ifndef VMA_LEAK_LOG_FORMAT
+#    define VMA_LEAK_LOG_FORMAT(format, ...) VMA_DEBUG_LOG_FORMAT(format, __VA_ARGS__)
+#endif
+
+#ifndef VMA_HEAVY_ASSERT
+#    define VMA_HEAVY_ASSERT(expr)
+#endif
 
 // ComPtr
 #if (NRI_ENABLE_D3D11_SUPPORT || NRI_ENABLE_D3D12_SUPPORT)
@@ -147,18 +261,93 @@ protected:
 
 #endif
 
+// Macro stuff
+#define NRI_STRINGIFY_(token) #token
+#define NRI_STRINGIFY(token)  NRI_STRINGIFY_(token)
+
+#if defined(_WIN32)
+#    define NRI_VULKAN_LOADER_NAME "vulkan-1.dll"
+#elif defined(__APPLE__)
+#    define NRI_VULKAN_LOADER_NAME "libvulkan.1.dylib"
+#elif defined(__ANDROID__)
+#    define NRI_VULKAN_LOADER_NAME "libvulkan.so"
+#else
+#    define NRI_VULKAN_LOADER_NAME "libvulkan.so.1"
+#endif
+
+// Message reporting
+#define NRI_RETURN_ON_BAD_HRESULT(deviceBase, hr, funcName) \
+    if (hr < 0) { \
+        Result _result = GetResultFromHRESULT(hr); \
+        (deviceBase)->ReportMessage(Message::ERROR, _result, __FILE__, __LINE__, funcName "(): failed, result = 0x%08X (%d)!", hr, hr); \
+        return _result; \
+    }
+
+#define NRI_RETURN_VOID_ON_BAD_HRESULT(deviceBase, hr, funcName) \
+    if (hr < 0) { \
+        Result _result = GetResultFromHRESULT(hr); \
+        (deviceBase)->ReportMessage(Message::ERROR, _result, __FILE__, __LINE__, funcName "(): failed, result = 0x%08X (%d)!", hr, hr); \
+        return; \
+    }
+
+#define NRI_RETURN_ON_BAD_VKRESULT(deviceBase, vkResult, funcName) \
+    if (vkResult < 0) { \
+        Result _result = GetResultFromVkResult(vkResult); \
+        (deviceBase)->ReportMessage(Message::ERROR, _result, __FILE__, __LINE__, funcName "(): failed, result = 0x%08X (%d)!", vkResult, vkResult); \
+        return _result; \
+    }
+
+#define NRI_RETURN_VOID_ON_BAD_VKRESULT(deviceBase, vkResult, funcName) \
+    if (vkResult < 0) { \
+        Result _result = GetResultFromVkResult(vkResult); \
+        (deviceBase)->ReportMessage(Message::ERROR, _result, __FILE__, __LINE__, funcName "(): failed, result = 0x%08X (%d)!", vkResult, vkResult); \
+        return; \
+    }
+
+#define NRI_REPORT_ERROR_ON_BAD_NVAPI_STATUS(deviceBase, expression) \
+    if ((expression) != 0) { \
+        (deviceBase)->ReportMessage(Message::ERROR, Result::FAILURE, __FILE__, __LINE__, "%s: " NRI_STRINGIFY(expression) " failed!", __FUNCTION__); \
+    }
+
+#define NRI_RETURN_ON_FAILURE(deviceBase, condition, returnCode, format, ...) \
+    if (!(condition)) { \
+        (deviceBase)->ReportMessage(Message::ERROR, Result::FAILURE, __FILE__, __LINE__, "%s: " format, __FUNCTION__, ##__VA_ARGS__); \
+        return returnCode; \
+    }
+
+#define NRI_REPORT_INFO(deviceBase, format, ...)             (deviceBase)->ReportMessage(Message::INFO, Result::SUCCESS, __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define NRI_REPORT_WARNING(deviceBase, format, ...)          (deviceBase)->ReportMessage(Message::WARNING, Result::SUCCESS, __FILE__, __LINE__, "%s(): " format, __FUNCTION__, ##__VA_ARGS__)
+#define NRI_REPORT_ERROR(deviceBase, format, ...)            (deviceBase)->ReportMessage(Message::ERROR, Result::FAILURE, __FILE__, __LINE__, "%s(): " format, __FUNCTION__, ##__VA_ARGS__)
+#define NRI_REPORT_DEVICE_LOST_INFO(deviceBase, format, ...) (deviceBase)->ReportMessage(Message::INFO, Result::DEVICE_LOST, __FILE__, __LINE__, format, ##__VA_ARGS__)
+
+// Array validation
+#define NRI_VALIDATE_ARRAY(x)                 static_assert((size_t)x[x.size() - 1] != 0, "Some elements are missing in '" NRI_STRINGIFY(x) "'");
+#define NRI_VALIDATE_ARRAY_BY_PTR(x)          static_assert(x[x.size() - 1] != nullptr, "Some elements are missing in '" NRI_STRINGIFY(x) "'");
+#define NRI_VALIDATE_ARRAY_BY_FIELD(x, field) static_assert(x[x.size() - 1].field != decltype(x[x.size() - 1].field){}, "Some elements are missing in '" NRI_STRINGIFY(x) "'");
+
+// D3D
+#define NRI_SET_D3D_DEBUG_OBJECT_NAME(obj, name) \
+    if (obj) \
+    obj->SetPrivateData(WKPDID_D3DDebugObjectName, (UINT)std::strlen(name), name)
+
+// clang-format off
+#define NRI_ALLOCATE_SCRATCH(device, T, elementNum) { \
+        (device).GetAllocationCallbacks(), \
+        !(elementNum) ? nullptr : ( \
+            ((elementNum) * sizeof(T) + alignof(T)) > NRI_MAX_STACK_ALLOC_SIZE \
+                ? (T*)(device).GetAllocationCallbacks().Allocate((device).GetAllocationCallbacks().userArg, (elementNum) * sizeof(T), alignof(T)) \
+                : (T*)Align((T*)alloca((elementNum) * sizeof(T) + alignof(T)), alignof(T)) \
+        ), \
+        (elementNum) \
+    }
+// clang-format on
+
 namespace nri {
 
-// Consts
-constexpr uint32_t NODE_MASK = 0x1;        // mGPU is not planned
-constexpr uint32_t TIMEOUT_PRESENT = 1000; // 1 sec
-constexpr uint32_t TIMEOUT_FENCE = 5000;   // 5 sec
-constexpr uint64_t PRESENT_INDEX_BIT_NUM = 56ull;
-constexpr uint32_t MAX_MESSAGE_LENGTH = 2048;
-constexpr uint64_t VMA_PREFERRED_BLOCK_SIZE = 64 * 1024 * 1024;
+// Internal consts
+constexpr uint32_t NODE_MASK = 0x1;               // mGPU is not planned
 constexpr uint32_t ROOT_SIGNATURE_DWORD_NUM = 64; // https://learn.microsoft.com/en-us/windows/win32/direct3d12/root-signature-limits
-constexpr uint32_t ZERO_BUFFER_DEFAULT_SIZE = 4 * 1024 * 1024;
-constexpr size_t MAX_STACK_ALLOC_SIZE = 32 * 1024;
+constexpr uint64_t MAX_CACHED_HOST_COPY_RESOURCE_SIZE = 64 * 1024 * 1024;
 
 // Scratch
 template <typename T>
@@ -168,7 +357,7 @@ public:
         : m_Allocator(allocator)
         , m_Mem(mem)
         , m_Num(num) {
-        m_IsHeap = (num * sizeof(T) + alignof(T)) > MAX_STACK_ALLOC_SIZE;
+        m_IsHeap = (num * sizeof(T) + alignof(T)) > NRI_MAX_STACK_ALLOC_SIZE;
     }
 
     ~Scratch() {
@@ -205,6 +394,29 @@ inline T Align(T x, size_t alignment) {
     return (T)((size_t(x) + alignment - 1) & ~(alignment - 1));
 }
 
+inline void CopyTextureData(void* dstData, uint64_t dstRowPitch, uint64_t dstSlicePitch, const void* srcData, uint64_t srcRowPitch, uint64_t srcSlicePitch, uint64_t rowSize, uint32_t rowNum, uint32_t sliceNum) {
+    uint8_t* dst = (uint8_t*)dstData;
+    const uint8_t* src = (const uint8_t*)srcData;
+    uint64_t sliceSize = rowSize * rowNum;
+
+    if (dstRowPitch == rowSize && srcRowPitch == rowSize) {
+        if (dstSlicePitch == sliceSize && srcSlicePitch == sliceSize) {
+            memcpy(dst, src, (size_t)(sliceSize * sliceNum));
+            return;
+        }
+
+        for (uint32_t z = 0; z < sliceNum; z++)
+            memcpy(dst + uint64_t(z) * dstSlicePitch, src + uint64_t(z) * srcSlicePitch, (size_t)sliceSize);
+
+        return;
+    }
+
+    for (uint32_t z = 0; z < sliceNum; z++) {
+        for (uint32_t y = 0; y < rowNum; y++)
+            memcpy(dst + uint64_t(z) * dstSlicePitch + uint64_t(y) * dstRowPitch, src + uint64_t(z) * srcSlicePitch + uint64_t(y) * srcRowPitch, (size_t)rowSize);
+    }
+}
+
 template <typename... Args>
 constexpr void MaybeUnused([[maybe_unused]] const Args&... args) {
 }
@@ -237,8 +449,10 @@ inline T* Allocate(const AllocationCallbacks& allocationCallbacks, Args&&... arg
 template <typename T>
 inline void Destroy(const AllocationCallbacks& allocationCallbacks, T* object) {
     if (object) {
+        // FIXED BY AI: Preserve callbacks before destruction invalidates object-backed references.
+        const AllocationCallbacks allocationCallbacksCopy = allocationCallbacks;
         object->~T();
-        allocationCallbacks.Free(allocationCallbacks.userArg, object);
+        allocationCallbacksCopy.Free(allocationCallbacksCopy.userArg, object);
     }
 }
 
@@ -247,6 +461,10 @@ constexpr uint64_t MsToUs(uint32_t x) {
 }
 
 constexpr void ReturnVoid() {
+}
+
+static inline bool IsAligned(uint64_t value, uint64_t alignment) {
+    return alignment <= 1 || value % alignment == 0;
 }
 
 // Allocator
@@ -381,19 +599,6 @@ inline TextureDesc FixTextureDesc(const TextureDesc& textureDesc) {
     return desc;
 }
 
-inline Uid_t ConstructUid(uint8_t luid[8], uint8_t uuid[16], bool isLuidValid) {
-    Uid_t out = {};
-
-    if (isLuidValid)
-        out.low = *(uint64_t*)luid;
-    else {
-        out.low = *(uint64_t*)uuid;
-        out.high = *(uint64_t*)(uuid + 8);
-    }
-
-    return out;
-}
-
 inline bool CompareUid(const Uid_t& a, const Uid_t& b) {
     return a.low == b.low && a.high == b.high;
 }
@@ -401,13 +606,6 @@ inline bool CompareUid(const Uid_t& a, const Uid_t& b) {
 // Strings
 void ConvertCharToWchar(const char* in, wchar_t* out, size_t outLen);
 void ConvertWcharToChar(const wchar_t* in, char* out, size_t outLen);
-
-// Swap chain ID
-uint64_t GetSwapChainId();
-
-inline uint64_t GetPresentIndex(uint64_t presentId) {
-    return presentId & ((1ull << PRESENT_INDEX_BIT_NUM) - 1ull);
-}
 
 // Windows/D3D specific
 #if (NRI_ENABLE_D3D11_SUPPORT || NRI_ENABLE_D3D12_SUPPORT)
@@ -437,105 +635,140 @@ struct DisplayDescHelper {
 
 #endif
 
+// VK related
+#if NRI_ENABLE_VK_SUPPORT
+
+struct QueueFamilyProps {
+    uint32_t queueCount;
+    uint32_t videoDecodeCodecNum;
+    uint32_t videoEncodeCodecNum;
+    bool graphics;
+    bool compute;
+    bool copy;
+    bool sparse;
+    bool videoDecode;
+    bool videoEncode;
+    bool protect;
+    bool opticalFlow;
+};
+
+inline QueueType TrySelectPreferredQueueType(const QueueFamilyProps& props, std::array<uint32_t, (size_t)QueueType::MAX_NUM>& scores) {
+    // PREFERENCE_SCORE exceeds the maximum queue-count score plus all minor bonuses
+    constexpr uint32_t QUEUE_COUNT_CAP = 256;
+    constexpr uint32_t QUEUE_COUNT_WEIGHT = 16;
+    constexpr uint32_t MAX_MINOR_SCORE = 11;
+    constexpr uint32_t PREFERENCE_SCORE = ((QUEUE_COUNT_CAP * QUEUE_COUNT_WEIGHT + MAX_MINOR_SCORE) / 1000 + 1) * 1000;
+    constexpr uint32_t MAJOR_SCORE = PREFERENCE_SCORE * 2;
+    const uint32_t queueCountScore = QUEUE_COUNT_WEIGHT * std::min(props.queueCount, QUEUE_COUNT_CAP);
+
+    { // Prefer graphics+compute, then more queues, then other features
+        // VK permits transfer commands on graphics queues without "VK_QUEUE_TRANSFER_BIT". Scoring "props.copy" would reward an optional reported bit, not additional copy capability
+        size_t index = (size_t)QueueType::GRAPHICS;
+        uint32_t score = ((props.graphics ? MAJOR_SCORE : 0)
+            + (props.compute ? PREFERENCE_SCORE : 0)
+            + queueCountScore
+            + (props.sparse ? 4 : 0)
+            + (props.videoDecode ? 2 : 0)
+            + (props.videoEncode ? 2 : 0)
+            + (props.protect ? 1 : 0)
+            + (props.opticalFlow ? 1 : 0));
+
+        if (props.graphics && score > scores[index]) {
+            scores[index] = score;
+            return QueueType::GRAPHICS;
+        }
+    }
+
+    { // Prefer compute-only, then more queues
+        size_t index = (size_t)QueueType::COMPUTE;
+        bool computeOnly = props.compute && !props.graphics && !props.videoDecode && !props.videoEncode && !props.opticalFlow;
+        uint32_t score = ((computeOnly ? MAJOR_SCORE : 0)
+            + (!props.graphics ? PREFERENCE_SCORE : 0)
+            + queueCountScore + (props.sparse ? 4 : 0)
+            + (!props.videoDecode ? 2 : 0)
+            + (!props.videoEncode ? 2 : 0)
+            + (props.protect ? 1 : 0)
+            + (!props.opticalFlow ? 1 : 0));
+
+        if (props.compute && score > scores[index]) {
+            scores[index] = score;
+            return QueueType::COMPUTE;
+        }
+    }
+
+    { // Prefer copy-only, then more queues
+        size_t index = (size_t)QueueType::COPY;
+        bool copyOnly = props.copy && !props.graphics && !props.compute && !props.videoDecode && !props.videoEncode && !props.opticalFlow;
+        uint32_t score = ((copyOnly ? MAJOR_SCORE : 0)
+            + (!props.graphics ? PREFERENCE_SCORE : 0)
+            + (!props.compute ? PREFERENCE_SCORE : 0)
+            + queueCountScore
+            + (props.sparse ? 4 : 0)
+            + (!props.videoDecode ? 2 : 0)
+            + (!props.videoEncode ? 2 : 0)
+            + (props.protect ? 1 : 0)
+            + (!props.opticalFlow ? 1 : 0));
+
+        if (props.copy && score > scores[index]) {
+            scores[index] = score;
+            return QueueType::COPY;
+        }
+    }
+
+    { // Prefer the most video decode codecs, then more queues
+        size_t index = (size_t)QueueType::VIDEO_DECODE;
+        uint32_t score = props.videoDecodeCodecNum * MAJOR_SCORE
+            + queueCountScore
+            + (!props.graphics ? 1 : 0)
+            + (!props.compute ? 1 : 0)
+            + (!props.copy ? 1 : 0)
+            + (props.sparse ? 4 : 0)
+            + (!props.videoEncode ? 2 : 0)
+            + (props.protect ? 1 : 0)
+            + (!props.opticalFlow ? 1 : 0);
+
+        if (props.videoDecode && score > scores[index]) {
+            scores[index] = score;
+            return QueueType::VIDEO_DECODE;
+        }
+    }
+
+    { // Prefer the most video encode codecs, then more queues
+        size_t index = (size_t)QueueType::VIDEO_ENCODE;
+        uint32_t score = props.videoEncodeCodecNum * MAJOR_SCORE
+            + queueCountScore
+            + (!props.graphics ? 1 : 0)
+            + (!props.compute ? 1 : 0)
+            + (!props.copy ? 1 : 0)
+            + (props.sparse ? 4 : 0)
+            + (!props.videoDecode ? 2 : 0)
+            + (props.protect ? 1 : 0)
+            + (!props.opticalFlow ? 1 : 0);
+
+        if (props.videoEncode && score > scores[index]) {
+            scores[index] = score;
+            return QueueType::VIDEO_ENCODE;
+        }
+    }
+
+    return QueueType::MAX_NUM;
+}
+
+inline Uid_t ConstructUid(uint8_t luid[8], uint8_t uuid[16], bool isLuidValid) {
+    Uid_t out = {};
+
+    if (isLuidValid)
+        memcpy(&out.low, luid, sizeof(out.low));
+    else {
+        memcpy(&out.low, uuid, sizeof(out.low));
+        memcpy(&out.high, uuid + 8, sizeof(out.high));
+    }
+
+    return out;
+}
+
+#endif
+
 } // namespace nri
 
-#include "DeviceBase.h" // TODO: a weird place, but needs to be here...
-
-//==============================================================================================================================================================
-// Macro stuff
-//==============================================================================================================================================================
-
-#if defined(_WIN32)
-#    define NRI_VULKAN_LOADER_NAME "vulkan-1.dll"
-#elif defined(__APPLE__)
-#    define NRI_VULKAN_LOADER_NAME "libvulkan.1.dylib"
-#elif defined(__ANDROID__)
-#    define NRI_VULKAN_LOADER_NAME "libvulkan.so"
-#else
-#    define NRI_VULKAN_LOADER_NAME "libvulkan.so.1"
-#endif
-
-#ifdef NDEBUG
-#    define NRI_CHECK(condition, message) MaybeUnused(condition)
-#else
-#    define NRI_CHECK(condition, message) assert((condition) && message)
-#endif
-
-#define NRI_INLINE inline // we want to inline all functions, which are actually wrappers for the interface functions
-
-#define NRI_STRINGIFY_(token) #token
-#define NRI_STRINGIFY(token)  NRI_STRINGIFY_(token)
-
-// Message reporting
-#define NRI_RETURN_ON_BAD_HRESULT(deviceBase, hr, funcName) \
-    if (hr < 0) { \
-        Result _result = GetResultFromHRESULT(hr); \
-        (deviceBase)->ReportMessage(Message::ERROR, _result, __FILE__, __LINE__, funcName "(): failed, result = 0x%08X (%d)!", __FUNCTION__, hr, hr); \
-        return _result; \
-    }
-
-#define NRI_RETURN_VOID_ON_BAD_HRESULT(deviceBase, hr, funcName) \
-    if (hr < 0) { \
-        Result _result = GetResultFromHRESULT(hr); \
-        (deviceBase)->ReportMessage(Message::ERROR, _result, __FILE__, __LINE__, funcName "(): failed, result = 0x%08X (%d)!", __FUNCTION__, hr, hr); \
-        return; \
-    }
-
-#define NRI_RETURN_ON_BAD_VKRESULT(deviceBase, vkResult, funcName) \
-    if (vkResult < 0) { \
-        Result _result = GetResultFromVkResult(vkResult); \
-        (deviceBase)->ReportMessage(Message::ERROR, _result, __FILE__, __LINE__, funcName "(): failed, result = 0x%08X (%d)!", __FUNCTION__, vkResult, vkResult); \
-        return _result; \
-    }
-
-#define NRI_RETURN_VOID_ON_BAD_VKRESULT(deviceBase, vkResult, funcName) \
-    if (vkResult < 0) { \
-        Result _result = GetResultFromVkResult(vkResult); \
-        (deviceBase)->ReportMessage(Message::ERROR, _result, __FILE__, __LINE__, funcName "(): failed, result = 0x%08X (%d)!", __FUNCTION__, vkResult, vkResult); \
-        return; \
-    }
-
-#define NRI_REPORT_ERROR_ON_BAD_NVAPI_STATUS(deviceBase, expression) \
-    if ((expression) != 0) { \
-        (deviceBase)->ReportMessage(Message::ERROR, Result::FAILURE, __FILE__, __LINE__, "%s: " NRI_STRINGIFY(expression) " failed!", __FUNCTION__); \
-    }
-
-#define NRI_RETURN_ON_FAILURE(deviceBase, condition, returnCode, format, ...) \
-    if (!(condition)) { \
-        (deviceBase)->ReportMessage(Message::ERROR, Result::FAILURE, __FILE__, __LINE__, "%s: " format, __FUNCTION__, ##__VA_ARGS__); \
-        return returnCode; \
-    }
-
-#define NRI_REPORT_INFO(deviceBase, format, ...)    (deviceBase)->ReportMessage(Message::INFO, Result::SUCCESS, __FILE__, __LINE__, format, ##__VA_ARGS__)
-#define NRI_REPORT_WARNING(deviceBase, format, ...) (deviceBase)->ReportMessage(Message::WARNING, Result::SUCCESS, __FILE__, __LINE__, "%s(): " format, __FUNCTION__, ##__VA_ARGS__)
-#define NRI_REPORT_ERROR(deviceBase, format, ...)   (deviceBase)->ReportMessage(Message::ERROR, Result::FAILURE, __FILE__, __LINE__, "%s(): " format, __FUNCTION__, ##__VA_ARGS__)
-
-// Queue scores // TODO: improve?
-#define GRAPHICS_QUEUE_SCORE \
-    ((graphics ? 100 : 0) + (compute ? 10 : 0) + (copy ? 10 : 0) + (sparse ? 5 : 0) + (videoDecode ? 2 : 0) + (videoEncode ? 2 : 0) + (protect ? 1 : 0) + (opticalFlow ? 1 : 0))
-#define COMPUTE_QUEUE_SCORE \
-    ((!graphics ? 10 : 0) + (compute ? 100 : 0) + (!copy ? 10 : 0) + (sparse ? 5 : 0) + (!videoDecode ? 2 : 0) + (!videoEncode ? 2 : 0) + (protect ? 1 : 0) + (!opticalFlow ? 1 : 0))
-#define COPY_QUEUE_SCORE \
-    ((!graphics ? 10 : 0) + (!compute ? 10 : 0) + (copy ? 100 * familyProps.queueCount : 0) + (sparse ? 5 : 0) + (!videoDecode ? 2 : 0) + (!videoEncode ? 2 : 0) + (protect ? 1 : 0) + (!opticalFlow ? 1 : 0))
-
-// Array validation
-#define NRI_VALIDATE_ARRAY(x)                 static_assert((size_t)x[x.size() - 1] != 0, "Some elements are missing in '" NRI_STRINGIFY(x) "'");
-#define NRI_VALIDATE_ARRAY_BY_PTR(x)          static_assert(x[x.size() - 1] != nullptr, "Some elements are missing in '" NRI_STRINGIFY(x) "'");
-#define NRI_VALIDATE_ARRAY_BY_FIELD(x, field) static_assert(x[x.size() - 1].field != 0, "Some elements are missing in '" NRI_STRINGIFY(x) "'");
-
-// D3D
-#define NRI_SET_D3D_DEBUG_OBJECT_NAME(obj, name) \
-    if (obj) \
-    obj->SetPrivateData(WKPDID_D3DDebugObjectName, (UINT)std::strlen(name), name)
-
-// clang-format off
-#define NRI_ALLOCATE_SCRATCH(device, T, elementNum) { \
-        (device).GetAllocationCallbacks(), \
-        !(elementNum) ? nullptr : ( \
-            ((elementNum) * sizeof(T) + alignof(T)) > MAX_STACK_ALLOC_SIZE \
-                ? (T*)(device).GetAllocationCallbacks().Allocate((device).GetAllocationCallbacks().userArg, (elementNum) * sizeof(T), alignof(T)) \
-                : (T*)Align((T*)alloca((elementNum) * sizeof(T) + alignof(T)), alignof(T)) \
-        ), \
-        (elementNum) \
-    }
-// clang-format on
+#include "DeviceBase.h" // requires "StdAllocator"

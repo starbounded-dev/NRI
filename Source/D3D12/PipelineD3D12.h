@@ -6,8 +6,6 @@
 
 namespace nri {
 
-struct PipelineLayoutD3D12;
-
 struct PipelineD3D12 final : public DebugNameBase {
     inline PipelineD3D12(DeviceD3D12& device)
         : m_Device(device)
@@ -47,7 +45,7 @@ struct PipelineD3D12 final : public DebugNameBase {
     // NRI
     //================================================================================================================
 
-    Result WriteShaderGroupIdentifiers(uint32_t baseShaderGroupIndex, uint32_t shaderGroupNum, void* dst) const;
+    Result WriteShaderGroupIdentifiers(uint32_t baseShaderGroupIndex, uint32_t shaderGroupNum, uint32_t dstStride, void* dst) const;
 
 private:
     Result CreateFromStream(const GraphicsPipelineDesc& graphicsPipelineDesc);

@@ -5,8 +5,9 @@
 namespace nri {
 
 struct CommandAllocatorVal final : public ObjectVal {
-    CommandAllocatorVal(DeviceVal& device, CommandAllocator* commandAllocator)
-        : ObjectVal(device, commandAllocator) {
+    CommandAllocatorVal(DeviceVal& device, CommandAllocator* commandAllocator, QueueType queueType)
+        : ObjectVal(device, commandAllocator)
+        , m_QueueType(queueType) {
     }
 
     inline CommandAllocator* GetImpl() const {
@@ -19,6 +20,9 @@ struct CommandAllocatorVal final : public ObjectVal {
 
     Result CreateCommandBuffer(CommandBuffer*& commandBuffer);
     void Reset();
+
+private:
+    QueueType m_QueueType = QueueType::MAX_NUM;
 };
 
 } // namespace nri

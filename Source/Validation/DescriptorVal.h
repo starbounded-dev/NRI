@@ -64,9 +64,29 @@ struct DescriptorVal final : public ObjectVal {
             || m_Type == DescriptorTypeExt::STORAGE_STRUCTURED_BUFFER;
     }
 
+    inline bool IsColorAttachment() const {
+        return m_Type == DescriptorTypeExt::COLOR_ATTACHMENT;
+    }
+
+    inline bool IsDepthStencilAttachment() const {
+        return m_Type == DescriptorTypeExt::DEPTH_STENCIL_ATTACHMENT;
+    }
+
+    inline bool IsShadingRateAttachment() const {
+        return m_Type == DescriptorTypeExt::SHADING_RATE_ATTACHMENT;
+    }
+
     inline bool IsAttachment() const {
         return m_Type == DescriptorTypeExt::COLOR_ATTACHMENT
             || m_Type == DescriptorTypeExt::DEPTH_STENCIL_ATTACHMENT;
+    }
+
+    inline Format GetFormat() const {
+        return m_Format;
+    }
+
+    inline uint64_t GetRootDescriptorOffsetMax() const {
+        return m_RootDescriptorOffsetMax;
     }
 
     inline bool IsDepthReadonly() const {
@@ -79,6 +99,8 @@ struct DescriptorVal final : public ObjectVal {
 
 private:
     DescriptorTypeExt m_Type = DescriptorTypeExt::MAX_NUM;
+    Format m_Format = Format::UNKNOWN;
+    uint64_t m_RootDescriptorOffsetMax = 0;
     bool m_IsDepthReadonly = false;
     bool m_IsStencilReadonly = false;
 };

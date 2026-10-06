@@ -1,30 +1,34 @@
 // © 2021 NVIDIA Corporation
 
-static inline DXGI_FORMAT GetShaderFormatForDepth(DXGI_FORMAT format) {
+static inline DXGI_FORMAT GetPatchedShaderResourceViewFormat(DXGI_FORMAT format, PlaneBits planes) {
     switch (format) {
         case DXGI_FORMAT_D16_UNORM:
             return DXGI_FORMAT_R16_UNORM;
         case DXGI_FORMAT_D24_UNORM_S8_UINT:
-            return DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+            return (planes & PlaneBits::STENCIL) ? DXGI_FORMAT_X24_TYPELESS_G8_UINT : DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
         case DXGI_FORMAT_D32_FLOAT:
             return DXGI_FORMAT_R32_FLOAT;
         case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
-            return DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
+            return (planes & PlaneBits::STENCIL) ? DXGI_FORMAT_X32_TYPELESS_G8X24_UINT : DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
         default:
             return format;
     }
 }
 
-static inline uint32_t GetPlaneIndex(Format format) { // TODO: still unclear, is it needed for a stencil-only SRV?
+static inline uint32_t GetPlaneIndex(PlaneBits planes) {
     // https://microsoft.github.io/DirectX-Specs/d3d/PlanarDepthStencilDDISpec.html
-    switch (format) {
-        case Format::X32_G8_UINT_X24:
-        case Format::X24_G8_UINT:
-            return 1;
+    if (planes & PlaneBits::STENCIL)
+        return 1;
+    if (planes & PlaneBits::PLANE_2)
+        return 2;
+    if (planes & PlaneBits::PLANE_1)
+        return 1;
+    return 0;
+}
 
-        default:
-            return 0;
-    }
+static inline DXGI_FORMAT GetResourceFormat(const TextureD3D12& texture) {
+    ID3D12ResourceBest* resource = texture;
+    return resource->GetDesc().Format;
 }
 
 static inline uint32_t GetComponentSwizzle(ComponentSwizzle componentSwizzle, uint32_t channelIndex) {
@@ -133,9 +137,11 @@ Result DescriptorD3D12::Create(const TextureViewDesc& textureViewDesc) {
                 desc.Texture1DArray.FirstArraySlice = textureViewDesc.layerOffset;
                 desc.Texture1DArray.ArraySize = layerNum;
 
-                if (textureViewDesc.readonlyPlanes & PlaneBits::DEPTH)
+                bool isDepthReadonly = textureViewDesc.planes != PlaneBits::ALL && (textureViewDesc.planes & PlaneBits::DEPTH) == 0;
+                bool isStencilReadonly = textureViewDesc.planes != PlaneBits::ALL && (textureViewDesc.planes & PlaneBits::STENCIL) == 0;
+                if (isDepthReadonly)
                     desc.Flags |= D3D12_DSV_FLAG_READ_ONLY_DEPTH;
-                if (textureViewDesc.readonlyPlanes & PlaneBits::STENCIL)
+                if (isStencilReadonly)
                     desc.Flags |= D3D12_DSV_FLAG_READ_ONLY_STENCIL;
 
                 return CreateDepthStencilView(textureD3D12, desc);
@@ -149,7 +155,7 @@ Result DescriptorD3D12::Create(const TextureViewDesc& textureViewDesc) {
             case TextureView::SUBPASS_INPUT:
             case TextureView::TEXTURE: {
                 D3D12_SHADER_RESOURCE_VIEW_DESC desc = {};
-                desc.Format = GetShaderFormatForDepth(format);
+                desc.Format = GetPatchedShaderResourceViewFormat(format, textureViewDesc.planes);
                 desc.Shader4ComponentMapping = GetComponentMapping(textureViewDesc.components);
                 if (textureDesc.sampleNum > 1) {
                     desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DMS;
@@ -157,14 +163,14 @@ Result DescriptorD3D12::Create(const TextureViewDesc& textureViewDesc) {
                     desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
                     desc.Texture2D.MostDetailedMip = textureViewDesc.mipOffset;
                     desc.Texture2D.MipLevels = mipNum;
-                    desc.Texture2D.PlaneSlice = GetPlaneIndex(textureViewDesc.format);
+                    desc.Texture2D.PlaneSlice = GetPlaneIndex(textureViewDesc.planes);
                 }
 
                 return CreateShaderResourceView(textureD3D12, desc);
             }
             case TextureView::TEXTURE_ARRAY: {
                 D3D12_SHADER_RESOURCE_VIEW_DESC desc = {};
-                desc.Format = GetShaderFormatForDepth(format);
+                desc.Format = GetPatchedShaderResourceViewFormat(format, textureViewDesc.planes);
                 desc.Shader4ComponentMapping = GetComponentMapping(textureViewDesc.components);
                 if (textureDesc.sampleNum > 1) {
                     desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DMSARRAY;
@@ -176,14 +182,14 @@ Result DescriptorD3D12::Create(const TextureViewDesc& textureViewDesc) {
                     desc.Texture2DArray.MipLevels = mipNum;
                     desc.Texture2DArray.FirstArraySlice = textureViewDesc.layerOffset;
                     desc.Texture2DArray.ArraySize = layerNum;
-                    desc.Texture2DArray.PlaneSlice = GetPlaneIndex(textureViewDesc.format);
+                    desc.Texture2DArray.PlaneSlice = GetPlaneIndex(textureViewDesc.planes);
                 }
 
                 return CreateShaderResourceView(textureD3D12, desc);
             }
             case TextureView::TEXTURE_CUBE: {
                 D3D12_SHADER_RESOURCE_VIEW_DESC desc = {};
-                desc.Format = GetShaderFormatForDepth(format);
+                desc.Format = GetPatchedShaderResourceViewFormat(format, textureViewDesc.planes);
                 desc.Shader4ComponentMapping = GetComponentMapping(textureViewDesc.components);
                 desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
                 desc.TextureCube.MostDetailedMip = textureViewDesc.mipOffset;
@@ -193,7 +199,7 @@ Result DescriptorD3D12::Create(const TextureViewDesc& textureViewDesc) {
             }
             case TextureView::TEXTURE_CUBE_ARRAY: {
                 D3D12_SHADER_RESOURCE_VIEW_DESC desc = {};
-                desc.Format = GetShaderFormatForDepth(format);
+                desc.Format = GetPatchedShaderResourceViewFormat(format, textureViewDesc.planes);
                 desc.Shader4ComponentMapping = GetComponentMapping(textureViewDesc.components);
                 desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBEARRAY;
                 desc.TextureCubeArray.MostDetailedMip = textureViewDesc.mipOffset;
@@ -208,7 +214,7 @@ Result DescriptorD3D12::Create(const TextureViewDesc& textureViewDesc) {
                 desc.Format = format;
                 desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
                 desc.Texture2D.MipSlice = textureViewDesc.mipOffset;
-                desc.Texture2D.PlaneSlice = GetPlaneIndex(textureViewDesc.format);
+                desc.Texture2D.PlaneSlice = GetPlaneIndex(textureViewDesc.planes);
 
                 return CreateUnorderedAccessView(textureD3D12, desc);
             }
@@ -219,7 +225,7 @@ Result DescriptorD3D12::Create(const TextureViewDesc& textureViewDesc) {
                 desc.Texture2DArray.MipSlice = textureViewDesc.mipOffset;
                 desc.Texture2DArray.FirstArraySlice = textureViewDesc.layerOffset;
                 desc.Texture2DArray.ArraySize = layerNum;
-                desc.Texture2DArray.PlaneSlice = GetPlaneIndex(textureViewDesc.format);
+                desc.Texture2DArray.PlaneSlice = GetPlaneIndex(textureViewDesc.planes);
 
                 return CreateUnorderedAccessView(textureD3D12, desc);
             }
@@ -235,7 +241,7 @@ Result DescriptorD3D12::Create(const TextureViewDesc& textureViewDesc) {
                     desc.Texture2DArray.MipSlice = textureViewDesc.mipOffset;
                     desc.Texture2DArray.FirstArraySlice = textureViewDesc.layerOffset;
                     desc.Texture2DArray.ArraySize = layerNum;
-                    desc.Texture2DArray.PlaneSlice = GetPlaneIndex(textureViewDesc.format);
+                    desc.Texture2DArray.PlaneSlice = GetPlaneIndex(textureViewDesc.planes);
                 }
 
                 return CreateRenderTargetView(textureD3D12, desc);
@@ -254,9 +260,11 @@ Result DescriptorD3D12::Create(const TextureViewDesc& textureViewDesc) {
                     desc.Texture2DArray.ArraySize = layerNum;
                 }
 
-                if (textureViewDesc.readonlyPlanes & PlaneBits::DEPTH)
+                bool isDepthReadonly = textureViewDesc.planes != PlaneBits::ALL && (textureViewDesc.planes & PlaneBits::DEPTH) == 0;
+                bool isStencilReadonly = textureViewDesc.planes != PlaneBits::ALL && (textureViewDesc.planes & PlaneBits::STENCIL) == 0;
+                if (isDepthReadonly)
                     desc.Flags |= D3D12_DSV_FLAG_READ_ONLY_DEPTH;
-                if (textureViewDesc.readonlyPlanes & PlaneBits::STENCIL)
+                if (isStencilReadonly)
                     desc.Flags |= D3D12_DSV_FLAG_READ_ONLY_STENCIL;
 
                 return CreateDepthStencilView(textureD3D12, desc);
@@ -309,7 +317,7 @@ Result DescriptorD3D12::Create(const TextureViewDesc& textureViewDesc) {
 Result DescriptorD3D12::Create(const BufferViewDesc& bufferViewDesc) {
     const BufferD3D12& bufferD3D12 = *((BufferD3D12*)bufferViewDesc.buffer);
     const BufferDesc& bufferDesc = bufferD3D12.GetDesc();
-    uint64_t size = bufferViewDesc.size == WHOLE_SIZE ? bufferDesc.size : bufferViewDesc.size;
+    uint64_t size = bufferViewDesc.size == WHOLE_SIZE ? (bufferDesc.size - bufferViewDesc.offset) : bufferViewDesc.size;
 
     Format patchedFormat = Format::UNKNOWN;
     uint32_t structureStride = 0;
@@ -328,7 +336,7 @@ Result DescriptorD3D12::Create(const BufferViewDesc& bufferViewDesc) {
     const DxgiFormat& format = GetDxgiFormat(patchedFormat);
     const FormatProps& formatProps = GetFormatProps(patchedFormat);
     uint32_t elementSize = structureStride ? structureStride : formatProps.stride;
-    uint64_t elementOffset = (uint32_t)(bufferViewDesc.offset / elementSize);
+    uint64_t elementOffset = bufferViewDesc.offset / elementSize;
     uint32_t elementNum = (uint32_t)(size / elementSize);
 
     m_ViewDesc.bufferGPUVA = bufferD3D12.GetDeviceAddress() + bufferViewDesc.offset;
@@ -367,7 +375,7 @@ Result DescriptorD3D12::Create(const BufferViewDesc& bufferViewDesc) {
             desc.Buffer.FirstElement = elementOffset;
             desc.Buffer.NumElements = elementNum;
             desc.Buffer.StructureByteStride = isRaw ? 0 : structureStride;
-            desc.Buffer.CounterOffsetInBytes = 0; // TODO: needed?
+            desc.Buffer.CounterOffsetInBytes = 0;
             desc.Buffer.Flags = isRaw ? D3D12_BUFFER_UAV_FLAG_RAW : D3D12_BUFFER_UAV_FLAG_NONE;
 
             return CreateUnorderedAccessView(bufferD3D12, desc);
@@ -413,22 +421,27 @@ Result DescriptorD3D12::Create(const SamplerDesc& samplerDesc) {
     if (samplerDesc.unnormalizedCoordinates)
         desc.Flags |= D3D12_SAMPLER_FLAG_NON_NORMALIZED_COORDINATES;
 
-    if (samplerDesc.isInteger) {
+    if (!samplerDesc.isInteger) {
+        desc.FloatBorderColor[0] = samplerDesc.borderColor.f.x;
+        desc.FloatBorderColor[1] = samplerDesc.borderColor.f.y;
+        desc.FloatBorderColor[2] = samplerDesc.borderColor.f.z;
+        desc.FloatBorderColor[3] = samplerDesc.borderColor.f.w;
+    } else if (m_Device.GetVersion() >= 11) {
         desc.UintBorderColor[0] = samplerDesc.borderColor.ui.x;
         desc.UintBorderColor[1] = samplerDesc.borderColor.ui.y;
         desc.UintBorderColor[2] = samplerDesc.borderColor.ui.z;
         desc.UintBorderColor[3] = samplerDesc.borderColor.ui.w;
 
         desc.Flags |= D3D12_SAMPLER_FLAG_UINT_BORDER_COLOR;
-    } else {
-        desc.FloatBorderColor[0] = samplerDesc.borderColor.f.x;
-        desc.FloatBorderColor[1] = samplerDesc.borderColor.f.y;
-        desc.FloatBorderColor[2] = samplerDesc.borderColor.f.z;
-        desc.FloatBorderColor[3] = samplerDesc.borderColor.f.w;
     }
 
-    HRESULT hr = m_Device->TryCreateSampler2(&desc, {m_DescriptorHandleCPU});
-    NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D12Device15::TryCreateSampler2");
+    if (m_Device.GetVersion() >= 15) {
+        HRESULT hr = m_Device->TryCreateSampler2(&desc, {m_DescriptorHandleCPU});
+        NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D12Device15::TryCreateSampler2");
+    } else if (m_Device.GetVersion() >= 11)
+        m_Device->CreateSampler2(&desc, {m_DescriptorHandleCPU});
+    else
+        m_Device->CreateSampler((D3D12_SAMPLER_DESC*)&desc, {m_DescriptorHandleCPU});
 #else
     D3D12_SAMPLER_DESC desc = {};
     desc.Filter = GetFilter(samplerDesc);
@@ -441,7 +454,7 @@ Result DescriptorD3D12::Create(const SamplerDesc& samplerDesc) {
     desc.MinLOD = samplerDesc.mipMin;
     desc.MaxLOD = samplerDesc.mipMax;
 
-    if (!samplerDesc.isInteger) { // TODO: the spec is not clear about the behavior, keep black
+    if (!samplerDesc.isInteger) {
         desc.BorderColor[0] = samplerDesc.borderColor.f.x;
         desc.BorderColor[1] = samplerDesc.borderColor.f.y;
         desc.BorderColor[2] = samplerDesc.borderColor.f.z;
@@ -464,11 +477,12 @@ Result DescriptorD3D12::CreateConstantBufferView(const D3D12_CONSTANT_BUFFER_VIE
     m_DescriptorHandleCPU = m_Device.GetDescriptorHandleCPU(m_Handle);
 
 #if NRI_ENABLE_AGILITY_SDK_SUPPORT
-    HRESULT hr = m_Device->TryCreateConstantBufferView(&desc, {m_DescriptorHandleCPU});
-    NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D12Device15::TryCreateConstantBufferView");
-#else
-    m_Device->CreateConstantBufferView(&desc, {m_DescriptorHandleCPU});
+    if (m_Device.GetVersion() >= 15) {
+        HRESULT hr = m_Device->TryCreateConstantBufferView(&desc, {m_DescriptorHandleCPU});
+        NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D12Device15::TryCreateConstantBufferView");
+    } else
 #endif
+        m_Device->CreateConstantBufferView(&desc, {m_DescriptorHandleCPU});
 
     m_Type = DescriptorType::CONSTANT_BUFFER;
 
@@ -483,11 +497,12 @@ Result DescriptorD3D12::CreateShaderResourceView(ID3D12Resource* resource, const
     m_DescriptorHandleCPU = m_Device.GetDescriptorHandleCPU(m_Handle);
 
 #if NRI_ENABLE_AGILITY_SDK_SUPPORT
-    HRESULT hr = m_Device->TryCreateShaderResourceView(resource, &desc, {m_DescriptorHandleCPU});
-    NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D12Device15::TryCreateShaderResourceView");
-#else
-    m_Device->CreateShaderResourceView(resource, &desc, {m_DescriptorHandleCPU});
+    if (m_Device.GetVersion() >= 15) {
+        HRESULT hr = m_Device->TryCreateShaderResourceView(resource, &desc, {m_DescriptorHandleCPU});
+        NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D12Device15::TryCreateShaderResourceView");
+    } else
 #endif
+        m_Device->CreateShaderResourceView(resource, &desc, {m_DescriptorHandleCPU});
 
     if (desc.ViewDimension == D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE)
         m_Type = DescriptorType::ACCELERATION_STRUCTURE;
@@ -510,11 +525,12 @@ Result DescriptorD3D12::CreateUnorderedAccessView(ID3D12Resource* resource, cons
     m_DescriptorHandleCPU = m_Device.GetDescriptorHandleCPU(m_Handle);
 
 #if NRI_ENABLE_AGILITY_SDK_SUPPORT
-    HRESULT hr = m_Device->TryCreateUnorderedAccessView(resource, nullptr, &desc, {m_DescriptorHandleCPU});
-    NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D12Device15::TryCreateUnorderedAccessView");
-#else
-    m_Device->CreateUnorderedAccessView(resource, nullptr, &desc, {m_DescriptorHandleCPU});
+    if (m_Device.GetVersion() >= 15) {
+        HRESULT hr = m_Device->TryCreateUnorderedAccessView(resource, nullptr, &desc, {m_DescriptorHandleCPU});
+        NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D12Device15::TryCreateUnorderedAccessView");
+    } else
 #endif
+        m_Device->CreateUnorderedAccessView(resource, nullptr, &desc, {m_DescriptorHandleCPU});
 
     if (desc.ViewDimension == D3D12_UAV_DIMENSION_BUFFER) {
         bool isStructured = desc.Buffer.StructureByteStride != 0;
@@ -535,11 +551,12 @@ Result DescriptorD3D12::CreateRenderTargetView(ID3D12Resource* resource, const D
     m_DescriptorHandleCPU = m_Device.GetDescriptorHandleCPU(m_Handle);
 
 #if NRI_ENABLE_AGILITY_SDK_SUPPORT
-    HRESULT hr = m_Device->TryCreateRenderTargetView(resource, &desc, {m_DescriptorHandleCPU});
-    NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D12Device15::TryCreateRenderTargetView");
-#else
-    m_Device->CreateRenderTargetView(resource, &desc, {m_DescriptorHandleCPU});
+    if (m_Device.GetVersion() >= 15) {
+        HRESULT hr = m_Device->TryCreateRenderTargetView(resource, &desc, {m_DescriptorHandleCPU});
+        NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D12Device15::TryCreateRenderTargetView");
+    } else
 #endif
+        m_Device->CreateRenderTargetView(resource, &desc, {m_DescriptorHandleCPU});
 
     m_Type = DescriptorType::MAX_NUM;
 
@@ -554,11 +571,12 @@ Result DescriptorD3D12::CreateDepthStencilView(ID3D12Resource* resource, const D
     m_DescriptorHandleCPU = m_Device.GetDescriptorHandleCPU(m_Handle);
 
 #if NRI_ENABLE_AGILITY_SDK_SUPPORT
-    HRESULT hr = m_Device->TryCreateDepthStencilView(resource, &desc, {m_DescriptorHandleCPU});
-    NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D12Device15::TryCreateDepthStencilView");
-#else
-    m_Device->CreateDepthStencilView(resource, &desc, {m_DescriptorHandleCPU});
+    if (m_Device.GetVersion() >= 15) {
+        HRESULT hr = m_Device->TryCreateDepthStencilView(resource, &desc, {m_DescriptorHandleCPU});
+        NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D12Device15::TryCreateDepthStencilView");
+    } else
 #endif
+        m_Device->CreateDepthStencilView(resource, &desc, {m_DescriptorHandleCPU});
 
     m_Type = DescriptorType::MAX_NUM;
 

@@ -4,6 +4,60 @@ static inline bool IsConstantColorReferenced(BlendFactor factor) {
     return factor == BlendFactor::CONSTANT_COLOR || factor == BlendFactor::CONSTANT_ALPHA || factor == BlendFactor::ONE_MINUS_CONSTANT_COLOR || factor == BlendFactor::ONE_MINUS_CONSTANT_ALPHA;
 }
 
+static void AddInputAttachmentIndicesFromSpirv(Vector<uint32_t>& inputAttachmentIndices, const ShaderDesc& shaderDesc) {
+    constexpr uint32_t SPIRV_MAGIC = 0x07230203;
+    constexpr uint16_t SPIRV_OP_DECORATE = 71;
+    constexpr uint32_t SPIRV_DECORATION_INPUT_ATTACHMENT_INDEX = 43;
+
+    // Remove this parser only if "GraphicsPipelineDesc" provides input attachment indices or NRI requires "attachmentIndex == bindingIndex"
+    if (!(shaderDesc.stage & StageBits::FRAGMENT_SHADER) || !shaderDesc.bytecode || shaderDesc.size < 5 * sizeof(uint32_t) || (shaderDesc.size & 3))
+        return;
+
+    const uint32_t* code = (const uint32_t*)shaderDesc.bytecode;
+    uint32_t wordNum = (uint32_t)(shaderDesc.size / sizeof(uint32_t));
+    if (code[0] != SPIRV_MAGIC)
+        return;
+
+    for (uint32_t offset = 5; offset < wordNum;) {
+        uint32_t instruction = code[offset];
+        uint16_t wordCount = (uint16_t)(instruction >> 16);
+        uint16_t opCode = (uint16_t)instruction;
+
+        if (!wordCount || offset + wordCount > wordNum)
+            break;
+
+        if (opCode == SPIRV_OP_DECORATE && wordCount >= 4 && code[offset + 2] == SPIRV_DECORATION_INPUT_ATTACHMENT_INDEX)
+            SetRenderPassInputAttachmentIndex(inputAttachmentIndices, code[offset + 3]);
+
+        offset += wordCount;
+    }
+}
+
+static void FillRenderPassInputAttachmentIndices(Vector<uint32_t>& inputAttachmentIndices, const GraphicsPipelineDesc& graphicsPipelineDesc) {
+    for (uint32_t i = 0; i < graphicsPipelineDesc.shaderNum; i++)
+        AddInputAttachmentIndicesFromSpirv(inputAttachmentIndices, graphicsPipelineDesc.shaders[i]);
+}
+
+static void FillRenderPassInputAttachmentCompatibilityIndices(Vector<uint32_t>& inputAttachmentIndices, const GraphicsPipelineDesc& graphicsPipelineDesc) {
+    FillRenderPassInputAttachmentIndices(inputAttachmentIndices, graphicsPipelineDesc);
+    if (!inputAttachmentIndices.empty())
+        return;
+
+    const PipelineLayoutVK& pipelineLayoutVK = *(PipelineLayoutVK*)graphicsPipelineDesc.pipelineLayout;
+    const BindingInfo& bindingInfo = pipelineLayoutVK.GetBindingInfo();
+
+    for (const DescriptorRangeDesc& range : bindingInfo.ranges) {
+        if (range.descriptorType != DescriptorType::INPUT_ATTACHMENT)
+            continue;
+
+        for (uint32_t i = 0; i < range.descriptorNum; i++) {
+            uint32_t index = range.baseRegisterIndex + i;
+            if (index < graphicsPipelineDesc.outputMerger.colorNum)
+                SetRenderPassInputAttachmentIndex(inputAttachmentIndices, index);
+        }
+    }
+}
+
 static bool FillPipelineRobustness(const DeviceVK& device, Robustness robustness, VkPipelineRobustnessCreateInfoEXT& robustnessInfo) {
     if (!device.m_IsSupported.pipelineRobustness || robustness == Robustness::DEFAULT)
         return false;
@@ -33,6 +87,28 @@ static bool FillPipelineRobustness(const DeviceVK& device, Robustness robustness
     return true;
 }
 
+static inline void SetupDescriptorHeapShaderStages(const PipelineLayoutVK& pipelineLayout, VkPipelineShaderStageCreateInfo* stages, uint32_t stageNum, VkDescriptorSetAndBindingMappingEXT* mappings, VkShaderDescriptorSetAndBindingMappingInfoEXT* mappingInfos, DescriptorHeapMappingSamplerVK* samplers) {
+    const uint32_t mappingMaxNum = pipelineLayout.GetDescriptorHeapMappingMaxNum();
+    if (!mappingMaxNum)
+        return;
+
+    const uint32_t samplerMaxNum = pipelineLayout.GetDescriptorHeapSamplerMaxNum();
+    for (uint32_t i = 0; i < stageNum; i++) {
+        const uint32_t mappingOffset = i * mappingMaxNum;
+        const uint32_t samplerOffset = i * samplerMaxNum;
+        DescriptorHeapMappingSamplerVK* stageSamplers = samplerMaxNum ? samplers + samplerOffset : nullptr;
+        const uint32_t mappingNum = pipelineLayout.SetupDescriptorHeapMappings((VkShaderStageFlagBits)stages[i].stage, mappings + mappingOffset, stageSamplers);
+        if (!mappingNum)
+            continue;
+
+        mappingInfos[i] = {VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT};
+        mappingInfos[i].mappingCount = mappingNum;
+        mappingInfos[i].pMappings = mappings + mappingOffset;
+        mappingInfos[i].pNext = stages[i].pNext;
+        stages[i].pNext = &mappingInfos[i];
+    }
+}
+
 PipelineVK::~PipelineVK() {
     if (m_OwnsNativeObjects) {
         const auto& vk = m_Device.GetDispatchTable();
@@ -55,6 +131,16 @@ Result PipelineVK::Create(const GraphicsPipelineDesc& graphicsPipelineDesc) {
 
         stages[i].pName = shaderDesc.entryPointName ? shaderDesc.entryPointName : "main";
     }
+
+    const PipelineLayoutVK& pipelineLayoutVK = *(PipelineLayoutVK*)graphicsPipelineDesc.pipelineLayout;
+    const bool isDescriptorHeap = pipelineLayoutVK.IsDescriptorHeap();
+    const uint32_t mappingMaxNum = pipelineLayoutVK.GetDescriptorHeapMappingMaxNum();
+    const uint32_t mappingSamplerMaxNum = pipelineLayoutVK.GetDescriptorHeapSamplerMaxNum();
+    Scratch<VkDescriptorSetAndBindingMappingEXT> mappings = NRI_ALLOCATE_SCRATCH(m_Device, VkDescriptorSetAndBindingMappingEXT, mappingMaxNum * graphicsPipelineDesc.shaderNum);
+    Scratch<VkShaderDescriptorSetAndBindingMappingInfoEXT> mappingInfos = NRI_ALLOCATE_SCRATCH(m_Device, VkShaderDescriptorSetAndBindingMappingInfoEXT, isDescriptorHeap ? graphicsPipelineDesc.shaderNum : 0);
+    Scratch<DescriptorHeapMappingSamplerVK> mappingSamplers = NRI_ALLOCATE_SCRATCH(m_Device, DescriptorHeapMappingSamplerVK, mappingSamplerMaxNum * graphicsPipelineDesc.shaderNum);
+    if (isDescriptorHeap)
+        SetupDescriptorHeapShaderStages(pipelineLayoutVK, stages, graphicsPipelineDesc.shaderNum, mappings, mappingInfos, mappingSamplers);
 
     // Vertex input
     const VertexInputDesc* vi = graphicsPipelineDesc.vertexInput;
@@ -90,6 +176,8 @@ Result PipelineVK::Create(const GraphicsPipelineDesc& graphicsPipelineDesc) {
             vertexBindingDesc = {};
             vertexBindingDesc.binding = stream.bindingSlot;
             vertexBindingDesc.inputRate = stream.stepRate == VertexStreamStepRate::PER_VERTEX ? VK_VERTEX_INPUT_RATE_VERTEX : VK_VERTEX_INPUT_RATE_INSTANCE;
+            if (!m_Device.GetDesc().features.extendedDynamicState)
+                vertexBindingDesc.stride = stream.stride;
         }
     }
 
@@ -160,6 +248,10 @@ Result PipelineVK::Create(const GraphicsPipelineDesc& graphicsPipelineDesc) {
     m_DepthBias = r.depthBias;
 
     VkPipelineViewportStateCreateInfo viewportState = {VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    if (!m_Device.GetDesc().features.extendedDynamicState) {
+        viewportState.viewportCount = m_Device.GetDesc().viewport.maxNum;
+        viewportState.scissorCount = m_Device.GetDesc().viewport.maxNum;
+    }
 
     // Depth-stencil
     const DepthAttachmentDesc& da = graphicsPipelineDesc.outputMerger.depth;
@@ -232,12 +324,58 @@ Result PipelineVK::Create(const GraphicsPipelineDesc& graphicsPipelineDesc) {
     pipelineRenderingCreateInfo.depthAttachmentFormat = GetVkFormat(om.depthStencilFormat);
     pipelineRenderingCreateInfo.stencilAttachmentFormat = depthStencilFormatProps.isStencil ? GetVkFormat(om.depthStencilFormat) : VK_FORMAT_UNDEFINED;
 
+    VkRenderPass renderPass = VK_NULL_HANDLE;
+    if (!m_Device.m_IsSupported.dynamicRendering) {
+        RenderPassDesc renderPassDesc(m_Device.GetStdAllocator());
+        renderPassDesc.viewMask = om.viewMask;
+        FillRenderPassInputAttachmentCompatibilityIndices(renderPassDesc.inputAttachmentIndices, graphicsPipelineDesc);
+
+        VkSampleCountFlagBits sampleNum = ms ? (VkSampleCountFlagBits)ms->sampleNum : VK_SAMPLE_COUNT_1_BIT;
+        for (uint32_t i = 0; i < om.colorNum; i++) {
+            RenderPassAttachmentDesc& color = renderPassDesc.colors.emplace_back();
+            color.format = colorFormats[i];
+            color.sampleNum = sampleNum;
+            color.layout = HasRenderPassInputAttachmentIndex(renderPassDesc.inputAttachmentIndices, i) ? VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        }
+
+        VkFormat depthStencilFormat = GetVkFormat(om.depthStencilFormat);
+        if (depthStencilFormat != VK_FORMAT_UNDEFINED) {
+            renderPassDesc.hasDepth = true;
+            renderPassDesc.depth.format = depthStencilFormat;
+            renderPassDesc.depth.sampleNum = sampleNum;
+            renderPassDesc.depth.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+            if (depthStencilFormatProps.isStencil) {
+                renderPassDesc.hasStencil = true;
+                renderPassDesc.stencil = renderPassDesc.depth;
+            }
+        }
+
+        if (r.shadingRate) {
+            renderPassDesc.hasShadingRate = true;
+            renderPassDesc.shadingRate.format = VK_FORMAT_R8_UINT;
+            renderPassDesc.shadingRate.sampleNum = VK_SAMPLE_COUNT_1_BIT;
+            renderPassDesc.shadingRate.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+            renderPassDesc.shadingRate.layout = VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR;
+        }
+
+        renderPass = m_Device.GetOrCreateRenderPass(renderPassDesc);
+        if (!renderPass)
+            return Result::FAILURE;
+    }
+
     // Dynamic state
     uint32_t dynamicStateNum = 0;
     std::array<VkDynamicState, 16> dynamicStates;
-    dynamicStates[dynamicStateNum++] = VK_DYNAMIC_STATE_VIEWPORT_WITH_COUNT;
-    dynamicStates[dynamicStateNum++] = VK_DYNAMIC_STATE_SCISSOR_WITH_COUNT;
-    if (vi)
+    if (m_Device.GetDesc().features.extendedDynamicState) {
+        dynamicStates[dynamicStateNum++] = VK_DYNAMIC_STATE_VIEWPORT_WITH_COUNT;
+        dynamicStates[dynamicStateNum++] = VK_DYNAMIC_STATE_SCISSOR_WITH_COUNT;
+    } else {
+        dynamicStates[dynamicStateNum++] = VK_DYNAMIC_STATE_VIEWPORT;
+        dynamicStates[dynamicStateNum++] = VK_DYNAMIC_STATE_SCISSOR;
+    }
+
+    if (vi && m_Device.GetDesc().features.extendedDynamicState)
         dynamicStates[dynamicStateNum++] = VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE;
     if (rasterizationState.depthBiasEnable)
         dynamicStates[dynamicStateNum++] = VK_DYNAMIC_STATE_DEPTH_BIAS;
@@ -258,14 +396,14 @@ Result PipelineVK::Create(const GraphicsPipelineDesc& graphicsPipelineDesc) {
 
     // Create
     VkPipelineCreateFlags flags = 0;
-    if (r.shadingRate)
+    if (r.shadingRate && m_Device.m_IsSupported.dynamicRendering)
         flags |= VK_PIPELINE_CREATE_RENDERING_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR;
-
-    const PipelineLayoutVK& pipelineLayoutVK = *(const PipelineLayoutVK*)graphicsPipelineDesc.pipelineLayout;
+    if ((graphicsPipelineDesc.flags & GraphicsPipelineBits::FAIL_ON_CACHE_MISS) && m_Device.GetDesc().features.pipelineCacheControl)
+        flags |= VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT;
 
     VkGraphicsPipelineCreateInfo info = {
         VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-        &pipelineRenderingCreateInfo,
+        nullptr,
         flags,
         graphicsPipelineDesc.shaderNum,
         stages,
@@ -279,22 +417,38 @@ Result PipelineVK::Create(const GraphicsPipelineDesc& graphicsPipelineDesc) {
         &colorBlendState,
         &dynamicState,
         pipelineLayoutVK,
-        VK_NULL_HANDLE,
+        renderPass,
         0,
         VK_NULL_HANDLE,
         -1,
     };
 
+    PNEXTCHAIN_SET(info.pNext);
+    if (m_Device.m_IsSupported.dynamicRendering)
+        PNEXTCHAIN_APPEND_STRUCT(pipelineRenderingCreateInfo);
+
     VkPipelineRobustnessCreateInfoEXT robustnessInfo = {VK_STRUCTURE_TYPE_PIPELINE_ROBUSTNESS_CREATE_INFO_EXT};
     if (FillPipelineRobustness(m_Device, graphicsPipelineDesc.robustness, robustnessInfo))
-        pipelineRenderingCreateInfo.pNext = &robustnessInfo;
+        PNEXTCHAIN_APPEND_STRUCT(robustnessInfo);
+
+    VkPipelineCreateFlags2CreateInfo flags2 = {VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO};
+    if (isDescriptorHeap) {
+        flags2.flags = flags | VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT;
+        PNEXTCHAIN_APPEND_STRUCT(flags2);
+    }
 
     const auto& vk = m_Device.GetDispatchTable();
-    VkResult vkResult = vk.CreateGraphicsPipelines(m_Device, VK_NULL_HANDLE, 1, &info, m_Device.GetVkAllocationCallbacks(), &m_Handle);
-    NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "vkCreateGraphicsPipelines");
+    VkPipelineCache pipelineCache = VK_NULL_HANDLE;
+    if (graphicsPipelineDesc.cache)
+        pipelineCache = *(PipelineCacheVK*)graphicsPipelineDesc.cache;
+    VkResult vkResult = vk.CreateGraphicsPipelines(m_Device, pipelineCache, 1, &info, m_Device.GetVkAllocationCallbacks(), &m_Handle);
 
     for (size_t i = 0; i < graphicsPipelineDesc.shaderNum; i++)
         vk.DestroyShaderModule(m_Device, modules[i], m_Device.GetVkAllocationCallbacks());
+
+    if (vkResult == VK_PIPELINE_COMPILE_REQUIRED)
+        return Result::FAILURE;
+    NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "vkCreateGraphicsPipelines");
 
     return Result::SUCCESS;
 }
@@ -302,7 +456,7 @@ Result PipelineVK::Create(const GraphicsPipelineDesc& graphicsPipelineDesc) {
 Result PipelineVK::Create(const ComputePipelineDesc& computePipelineDesc) {
     m_BindPoint = VK_PIPELINE_BIND_POINT_COMPUTE;
 
-    const PipelineLayoutVK& pipelineLayoutVK = *(const PipelineLayoutVK*)computePipelineDesc.pipelineLayout;
+    const PipelineLayoutVK& pipelineLayoutVK = *(PipelineLayoutVK*)computePipelineDesc.pipelineLayout;
 
     const VkShaderModuleCreateInfo moduleInfo = {
         VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
@@ -327,24 +481,51 @@ Result PipelineVK::Create(const ComputePipelineDesc& computePipelineDesc) {
         nullptr,
     };
 
+    const bool isDescriptorHeap = pipelineLayoutVK.IsDescriptorHeap();
+    const uint32_t mappingMaxNum = pipelineLayoutVK.GetDescriptorHeapMappingMaxNum();
+    const uint32_t mappingSamplerMaxNum = pipelineLayoutVK.GetDescriptorHeapSamplerMaxNum();
+    Scratch<VkDescriptorSetAndBindingMappingEXT> mappings = NRI_ALLOCATE_SCRATCH(m_Device, VkDescriptorSetAndBindingMappingEXT, mappingMaxNum);
+    VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo = {VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT};
+    Scratch<DescriptorHeapMappingSamplerVK> mappingSamplers = NRI_ALLOCATE_SCRATCH(m_Device, DescriptorHeapMappingSamplerVK, mappingSamplerMaxNum);
+    if (isDescriptorHeap)
+        SetupDescriptorHeapShaderStages(pipelineLayoutVK, &stage, 1, mappings, &mappingInfo, mappingSamplers);
+
+    VkPipelineCreateFlags computeFlags = 0;
+    if ((computePipelineDesc.flags & ComputePipelineBits::FAIL_ON_CACHE_MISS) && m_Device.GetDesc().features.pipelineCacheControl)
+        computeFlags |= VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT;
+
     VkComputePipelineCreateInfo info = {
         VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
         nullptr,
-        (VkPipelineCreateFlags)0,
+        computeFlags,
         stage,
         pipelineLayoutVK,
         VK_NULL_HANDLE,
         -1,
     };
 
+    PNEXTCHAIN_DECLARE(info.pNext);
+
     VkPipelineRobustnessCreateInfoEXT robustnessInfo = {VK_STRUCTURE_TYPE_PIPELINE_ROBUSTNESS_CREATE_INFO_EXT};
     if (FillPipelineRobustness(m_Device, computePipelineDesc.robustness, robustnessInfo))
-        info.pNext = &robustnessInfo;
+        PNEXTCHAIN_APPEND_STRUCT(robustnessInfo);
 
-    vkResult = vk.CreateComputePipelines(m_Device, VK_NULL_HANDLE, 1, &info, m_Device.GetVkAllocationCallbacks(), &m_Handle);
-    NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "vkCreateComputePipelines");
+    VkPipelineCreateFlags2CreateInfo flags2 = {VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO};
+    if (isDescriptorHeap) {
+        flags2.flags = computeFlags | VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT;
+        PNEXTCHAIN_APPEND_STRUCT(flags2);
+    }
+
+    VkPipelineCache pipelineCache = VK_NULL_HANDLE;
+    if (computePipelineDesc.cache)
+        pipelineCache = *(PipelineCacheVK*)computePipelineDesc.cache;
+    vkResult = vk.CreateComputePipelines(m_Device, pipelineCache, 1, &info, m_Device.GetVkAllocationCallbacks(), &m_Handle);
 
     vk.DestroyShaderModule(m_Device, module, m_Device.GetVkAllocationCallbacks());
+
+    if (vkResult == VK_PIPELINE_COMPILE_REQUIRED)
+        return Result::FAILURE;
+    NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "vkCreateComputePipelines");
 
     return Result::SUCCESS;
 }
@@ -352,7 +533,7 @@ Result PipelineVK::Create(const ComputePipelineDesc& computePipelineDesc) {
 Result PipelineVK::Create(const RayTracingPipelineDesc& rayTracingPipelineDesc) {
     m_BindPoint = VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR;
 
-    const PipelineLayoutVK& pipelineLayoutVK = *(const PipelineLayoutVK*)rayTracingPipelineDesc.pipelineLayout;
+    const PipelineLayoutVK& pipelineLayoutVK = *(PipelineLayoutVK*)rayTracingPipelineDesc.pipelineLayout;
 
     const uint32_t stageNum = rayTracingPipelineDesc.shaderLibrary->shaderNum;
     Scratch<VkPipelineShaderStageCreateInfo> stages = NRI_ALLOCATE_SCRATCH(m_Device, VkPipelineShaderStageCreateInfo, stageNum);
@@ -366,6 +547,15 @@ Result PipelineVK::Create(const RayTracingPipelineDesc& rayTracingPipelineDesc) 
 
         stages[i].pName = shaderDesc.entryPointName ? shaderDesc.entryPointName : "main";
     }
+
+    const bool isDescriptorHeap = pipelineLayoutVK.IsDescriptorHeap();
+    const uint32_t mappingMaxNum = pipelineLayoutVK.GetDescriptorHeapMappingMaxNum();
+    const uint32_t mappingSamplerMaxNum = pipelineLayoutVK.GetDescriptorHeapSamplerMaxNum();
+    Scratch<VkDescriptorSetAndBindingMappingEXT> mappings = NRI_ALLOCATE_SCRATCH(m_Device, VkDescriptorSetAndBindingMappingEXT, mappingMaxNum * stageNum);
+    Scratch<VkShaderDescriptorSetAndBindingMappingInfoEXT> mappingInfos = NRI_ALLOCATE_SCRATCH(m_Device, VkShaderDescriptorSetAndBindingMappingInfoEXT, isDescriptorHeap ? stageNum : 0);
+    Scratch<DescriptorHeapMappingSamplerVK> mappingSamplers = NRI_ALLOCATE_SCRATCH(m_Device, DescriptorHeapMappingSamplerVK, mappingSamplerMaxNum * stageNum);
+    if (isDescriptorHeap)
+        SetupDescriptorHeapShaderStages(pipelineLayoutVK, stages, stageNum, mappings, mappingInfos, mappingSamplers);
 
     Scratch<VkRayTracingShaderGroupCreateInfoKHR> groupArray = NRI_ALLOCATE_SCRATCH(m_Device, VkRayTracingShaderGroupCreateInfoKHR, rayTracingPipelineDesc.shaderGroupNum);
     for (uint32_t i = 0; i < rayTracingPipelineDesc.shaderGroupNum; i++) {
@@ -437,17 +627,35 @@ Result PipelineVK::Create(const RayTracingPipelineDesc& rayTracingPipelineDesc) 
         createInfo.flags |= VK_PIPELINE_CREATE_RAY_TRACING_SKIP_AABBS_BIT_KHR;
     if (rayTracingPipelineDesc.flags & RayTracingPipelineBits::ALLOW_MICROMAPS)
         createInfo.flags |= VK_PIPELINE_CREATE_RAY_TRACING_OPACITY_MICROMAP_BIT_EXT;
+    if ((rayTracingPipelineDesc.flags & RayTracingPipelineBits::FAIL_ON_CACHE_MISS) && m_Device.GetDesc().features.pipelineCacheControl)
+        createInfo.flags |= VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT;
+
+    PNEXTCHAIN_DECLARE(createInfo.pNext);
 
     VkPipelineRobustnessCreateInfoEXT robustnessInfo = {VK_STRUCTURE_TYPE_PIPELINE_ROBUSTNESS_CREATE_INFO_EXT};
     if (FillPipelineRobustness(m_Device, rayTracingPipelineDesc.robustness, robustnessInfo))
-        createInfo.pNext = &robustnessInfo;
+        PNEXTCHAIN_APPEND_STRUCT(robustnessInfo);
+
+    VkPipelineCreateFlags2CreateInfo flags2 = {VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO};
+    if (isDescriptorHeap) {
+        flags2.flags = createInfo.flags | VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT;
+        PNEXTCHAIN_APPEND_STRUCT(flags2);
+    }
 
     const auto& vk = m_Device.GetDispatchTable();
-    VkResult vkResult = vk.CreateRayTracingPipelinesKHR(m_Device, VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &createInfo, m_Device.GetVkAllocationCallbacks(), &m_Handle);
-    NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "vkCreateRayTracingPipelinesKHR");
+    VkPipelineCache pipelineCache = VK_NULL_HANDLE;
+    if (rayTracingPipelineDesc.cache)
+        pipelineCache = *(PipelineCacheVK*)rayTracingPipelineDesc.cache;
+    VkResult vkResult = vk.CreateRayTracingPipelinesKHR(m_Device, VK_NULL_HANDLE, pipelineCache, 1, &createInfo, m_Device.GetVkAllocationCallbacks(), &m_Handle);
 
+    // Destroy modules unconditionally - they're owned by this scope and must not leak on any failure path,
+    // matching the graphics/compute create paths above.
     for (size_t i = 0; i < stageNum; i++)
         vk.DestroyShaderModule(m_Device, modules[i], m_Device.GetVkAllocationCallbacks());
+
+    if (vkResult == VK_PIPELINE_COMPILE_REQUIRED)
+        return Result::FAILURE;
+    NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "vkCreateRayTracingPipelinesKHR");
 
     return Result::SUCCESS;
 }
@@ -490,12 +698,24 @@ NRI_INLINE void PipelineVK::SetDebugName(const char* name) {
     m_Device.SetDebugNameToTrivialObject(VK_OBJECT_TYPE_PIPELINE, (uint64_t)m_Handle, name);
 }
 
-NRI_INLINE Result PipelineVK::WriteShaderGroupIdentifiers(uint32_t baseShaderGroupIndex, uint32_t shaderGroupNum, void* dst) const {
-    const size_t dataSize = (size_t)shaderGroupNum * m_Device.GetDesc().shaderStage.rayTracing.shaderGroupIdentifierSize;
+NRI_INLINE Result PipelineVK::WriteShaderGroupIdentifiers(uint32_t baseShaderGroupIndex, uint32_t shaderGroupNum, uint32_t dstStride, void* dst) const {
+    const size_t identifierSize = m_Device.GetDesc().shaderStage.rayTracing.shaderGroupIdentifierSize;
+    const size_t dataSize = (size_t)shaderGroupNum * identifierSize;
 
     const auto& vk = m_Device.GetDispatchTable();
-    VkResult vkResult = vk.GetRayTracingShaderGroupHandlesKHR(m_Device, m_Handle, baseShaderGroupIndex, shaderGroupNum, dataSize, dst);
+    if (dstStride == identifierSize) {
+        VkResult vkResult = vk.GetRayTracingShaderGroupHandlesKHR(m_Device, m_Handle, baseShaderGroupIndex, shaderGroupNum, dataSize, dst);
+        NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "vkGetRayTracingShaderGroupHandlesKHR");
+
+        return Result::SUCCESS;
+    }
+
+    Scratch<uint8_t> identifiers = NRI_ALLOCATE_SCRATCH(m_Device, uint8_t, dataSize);
+    VkResult vkResult = vk.GetRayTracingShaderGroupHandlesKHR(m_Device, m_Handle, baseShaderGroupIndex, shaderGroupNum, dataSize, identifiers);
     NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "vkGetRayTracingShaderGroupHandlesKHR");
+
+    for (uint32_t i = 0; i < shaderGroupNum; i++)
+        memcpy((uint8_t*)dst + (size_t)i * dstStride, &identifiers[i * identifierSize], identifierSize);
 
     return Result::SUCCESS;
 }

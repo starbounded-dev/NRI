@@ -4,10 +4,6 @@
 
 namespace nri {
 
-struct QueueVK;
-struct FenceVK;
-struct TextureVK;
-
 struct SwapChainVK final : public DisplayDescHelper, DebugNameBase {
     SwapChainVK(DeviceVK& device)
         : m_Device(device)
@@ -18,10 +14,6 @@ struct SwapChainVK final : public DisplayDescHelper, DebugNameBase {
 
     inline DeviceVK& GetDevice() const {
         return m_Device;
-    }
-
-    inline uint64_t GetPresentId() const {
-        return m_PresentId;
     }
 
     Result Create(const SwapChainDesc& swapChainDesc);
@@ -42,12 +34,12 @@ struct SwapChainVK final : public DisplayDescHelper, DebugNameBase {
 
     Texture* const* GetTextures(uint32_t& textureNum) const;
     Result AcquireNextTexture(FenceVK& acquireSemaphore, uint32_t& textureIndex);
-    Result WaitForPresent();
-    Result Present(FenceVK& releaseSemaphore);
+    Result WaitForPresent(uint64_t presentId);
+    Result Present(FenceVK& releaseSemaphore, uint64_t presentId);
 
     Result SetLatencySleepMode(const LatencySleepMode& latencySleepMode);
-    Result SetLatencyMarker(LatencyMarker latencyMarker);
-    Result LatencySleep();
+    Result SetLatencyMarker(uint64_t presentId, LatencyMarker latencyMarker);
+    Result LatencySleep(uint64_t presentId);
     Result GetLatencyReport(LatencyReport& latencyReport);
 
 private:
@@ -58,7 +50,6 @@ private:
     VkSurfaceKHR m_Surface = VK_NULL_HANDLE;
     QueueVK* m_Queue = nullptr;
     void* m_Hwnd = nullptr;
-    uint64_t m_PresentId = 0;
     uint32_t m_TextureIndex = 0;
     SwapChainBits m_Flags = SwapChainBits::NONE;
 

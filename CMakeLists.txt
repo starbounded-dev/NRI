@@ -3,6 +3,14 @@ cmake_minimum_required(VERSION 3.30)
 include(CMakeDependentOption)
 include(FetchContent)
 
+# GitHub actions?
+if("$ENV{GITHUB_ACTIONS}" STREQUAL "")
+    set(GITHUB_CI FALSE CACHE BOOL "GitHub Actions runner" FORCE)
+else()
+    set(GITHUB_CI TRUE CACHE BOOL "GitHub Actions runner" FORCE)
+    message(STATUS "Detected environment: GitHub Actions...")
+endif()
+
 # Create project
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/Include/NRI.h" ver_h)
 string(REGEX MATCH "NRI_VERSION ([0-9]*)" _ ${ver_h})
@@ -18,24 +26,37 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 # Architecture
-if((CMAKE_GENERATOR_PLATFORM MATCHES "ARM64") OR (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64"))
+if(CMAKE_GENERATOR_PLATFORM STREQUAL "ARM64EC")
+    set(IS_ARM64 FALSE)
+    set(BIN_ARCHITECTURE "x64")
+    set(NVAPI_BIN_ARCHITECTURE "amd64")
+    set(WGPU_BIN_ARCHITECTURE "x86_64")
+elseif((CMAKE_GENERATOR_PLATFORM MATCHES "ARM64") OR (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64"))
     set(IS_ARM64 TRUE)
     set(BIN_ARCHITECTURE "arm64")
     set(NVAPI_BIN_ARCHITECTURE "arm64")
+    set(WGPU_BIN_ARCHITECTURE "aarch64")
 elseif(CMAKE_SIZEOF_VOID_P EQUAL 8)
     set(IS_ARM64 FALSE)
     set(BIN_ARCHITECTURE "x64")
     set(NVAPI_BIN_ARCHITECTURE "amd64")
-else()
+    set(WGPU_BIN_ARCHITECTURE "x86_64")
+elseif(CMAKE_SIZEOF_VOID_P EQUAL 4)
     set(IS_ARM64 FALSE)
     set(BIN_ARCHITECTURE "x86")
     set(NVAPI_BIN_ARCHITECTURE "x86")
+    if(WIN32)
+        set(WGPU_BIN_ARCHITECTURE "i686")
+    endif()
+else()
+    message(FATAL_ERROR "NRI: unsupported architecture or platform '${CMAKE_SYSTEM_NAME}', '${CMAKE_SYSTEM_PROCESSOR}'")
 endif()
 
 # Options
 set(NRI_AGILITY_SDK_DIR "AgilitySDK" CACHE STRING "Directory where Agility SDK will be copied relative to the directory with binaries")
-set(NRI_AGILITY_SDK_VERSION_MAJOR "619" CACHE STRING "Agility SDK major version") # 719 ("D3D12_ERROR_INVALID_REDIST" if Windows developer mode is not enabled)
-set(NRI_AGILITY_SDK_VERSION_MINOR "1" CACHE STRING "Agility SDK minor version") # 1-preview
+set(NRI_AGILITY_SDK_VERSION_MAJOR "619" CACHE STRING "Agility SDK major version") # 721 ("D3D12_ERROR_INVALID_REDIST" if Windows developer mode is not enabled)
+set(NRI_AGILITY_SDK_VERSION_MINOR "6" CACHE STRING "Agility SDK minor version") # 3-preview
+set(NRI_WGPU_VERSION "v29.0.1.1")
 set(NRI_SHADERS_PATH "${CMAKE_CURRENT_SOURCE_DIR}/_Shaders" CACHE STRING "Shader output path override")
 set(NRI_NVAPI_CUSTOM_PATH "" CACHE STRING "Path to a custom NVAPI library directory")
 
@@ -51,6 +72,7 @@ option(NRI_STREAMER_THREAD_SAFE "'NRIStreamer' thread safety (OFF is faster)" ON
 
 cmake_dependent_option(NRI_ENABLE_D3D11_SUPPORT "Enable D3D11 backend" ON "WIN32" OFF)
 cmake_dependent_option(NRI_ENABLE_D3D12_SUPPORT "Enable D3D12 backend" ON "WIN32" OFF)
+cmake_dependent_option(NRI_ENABLE_WGPU_SUPPORT "Enable WebGPU backend" ${GITHUB_CI} "WGPU_BIN_ARCHITECTURE; NOT ANDROID" OFF)
 cmake_dependent_option(NRI_ENABLE_AMDAGS "Enable AMD AGS library for D3D" ON "(NRI_ENABLE_D3D11_SUPPORT OR NRI_ENABLE_D3D12_SUPPORT); NOT IS_ARM64" OFF)
 cmake_dependent_option(NRI_ENABLE_NVAPI "Enable NVAPI library for D3D" ON "(NRI_ENABLE_D3D11_SUPPORT OR NRI_ENABLE_D3D12_SUPPORT); NOT IS_ARM64" OFF)
 cmake_dependent_option(NRI_ENABLE_AGILITY_SDK_SUPPORT "Enable Agility SDK support to unlock access to latest D3D12 features" ON "NRI_ENABLE_D3D12_SUPPORT" OFF)
@@ -90,6 +112,7 @@ foreach(opt IN ITEMS
     NRI_ENABLE_DEBUG_NAMES_AND_ANNOTATIONS
     NRI_ENABLE_NONE_SUPPORT
     NRI_ENABLE_VK_SUPPORT
+    NRI_ENABLE_WGPU_SUPPORT
     NRI_ENABLE_VALIDATION_SUPPORT
     NRI_ENABLE_NIS_SDK
     NRI_ENABLE_IMGUI_EXTENSION
@@ -126,7 +149,7 @@ if(NRI_ENABLE_AGILITY_SDK_SUPPORT)
         DOWNLOAD_EXTRACT_TIMESTAMP 1
         DOWNLOAD_NO_PROGRESS 1
         SOURCE_SUBDIR "ignore CMakeLists.txt"
-        URL https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/1.${NRI_AGILITY_SDK_VERSION_MAJOR}.${NRI_AGILITY_SDK_VERSION_MINOR}
+        URL "https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/1.${NRI_AGILITY_SDK_VERSION_MAJOR}.${NRI_AGILITY_SDK_VERSION_MINOR}"
     )
     list(APPEND DEPS agilitysdk)
 endif()
@@ -138,7 +161,7 @@ if(NRI_ENABLE_NVTX_SUPPORT)
         DOWNLOAD_EXTRACT_TIMESTAMP 1
         DOWNLOAD_NO_PROGRESS 1
         SOURCE_SUBDIR "ignore CMakeLists.txt"
-        URL https://github.com/NVIDIA/NVTX/archive/refs/tags/v3.4.0.zip
+        URL "https://github.com/NVIDIA/NVTX/archive/refs/tags/v3.6.0.zip"
     )
     list(APPEND DEPS nvtx)
 endif()
@@ -150,7 +173,7 @@ if(NRI_ENABLE_VK_SUPPORT)
         DOWNLOAD_EXTRACT_TIMESTAMP 1
         DOWNLOAD_NO_PROGRESS 1
         SOURCE_SUBDIR "ignore CMakeLists.txt"
-        URL https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.345.zip
+        URL "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.364.zip"
     )
     list(APPEND DEPS vulkan_headers)
 
@@ -160,12 +183,12 @@ if(NRI_ENABLE_VK_SUPPORT)
         DOWNLOAD_EXTRACT_TIMESTAMP 1
         DOWNLOAD_NO_PROGRESS 1
         SOURCE_SUBDIR "ignore CMakeLists.txt"
-        URL https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/archive/b3cbbb43ea3a506dffe10759e205a41c27c35ae2.zip
+        URL "https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/archive/3aa921224c154a0d2c43912bc88e1c42ce1f7607.zip"
     )
     list(APPEND DEPS vma)
 endif()
 
-set(NGX_VERSION "310.5.3")
+set(NGX_VERSION "310.9.1")
 if(NRI_ENABLE_NGX_SDK)
     # NVIDIA NGX SDK
     fetchcontent_declare(
@@ -173,7 +196,7 @@ if(NRI_ENABLE_NGX_SDK)
         DOWNLOAD_EXTRACT_TIMESTAMP 1
         DOWNLOAD_NO_PROGRESS 1
         SOURCE_SUBDIR "ignore CMakeLists.txt"
-        URL https://github.com/NVIDIA/DLSS/archive/refs/tags/v${NGX_VERSION}.zip
+        URL "https://github.com/NVIDIA/DLSS/archive/refs/tags/v${NGX_VERSION}.zip"
     )
     list(APPEND DEPS ngx)
 endif()
@@ -185,7 +208,7 @@ if(NRI_ENABLE_FFX_SDK)
         DOWNLOAD_EXTRACT_TIMESTAMP 1
         DOWNLOAD_NO_PROGRESS 1
         SOURCE_SUBDIR "ignore CMakeLists.txt"
-        URL https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/download/v1.1.4/FidelityFX-SDK-v1.1.4.zip
+        URL "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/download/v1.1.4/FidelityFX-SDK-v1.1.4.zip"
     )
     list(APPEND DEPS ffx)
 endif()
@@ -197,7 +220,7 @@ if(NRI_ENABLE_XESS_SDK)
         DOWNLOAD_EXTRACT_TIMESTAMP 1
         DOWNLOAD_NO_PROGRESS 1
         SOURCE_SUBDIR "ignore CMakeLists.txt"
-        URL https://github.com/intel/xess/archive/refs/tags/v3.0.0.zip
+        URL "https://github.com/intel/xess/archive/refs/tags/v3.0.2.zip"
     )
     list(APPEND DEPS xess)
 endif()
@@ -209,9 +232,34 @@ if(NRI_ENABLE_D3D12_SUPPORT)
         DOWNLOAD_EXTRACT_TIMESTAMP 1
         DOWNLOAD_NO_PROGRESS 1
         SOURCE_SUBDIR "ignore CMakeLists.txt"
-        URL https://github.com/GPUOpen-LibrariesAndSDKs/D3D12MemoryAllocator/archive/0fa62ed3a0a69b73230a8ec1faa752d4061c8dc8.zip
+        URL "https://github.com/GPUOpen-LibrariesAndSDKs/D3D12MemoryAllocator/archive/1d86c1130f61453634b1df85782e1fecfd59a525.zip"
     )
     list(APPEND DEPS d3d12ma)
+endif()
+
+if(NRI_ENABLE_WGPU_SUPPORT)
+    if(WIN32)
+        set(WGPU_NATIVE_PACKAGE "wgpu-windows-${WGPU_BIN_ARCHITECTURE}-msvc-release.zip")
+        set(WGPU_NATIVE_LIB_NAME "wgpu_native.dll.lib")
+        set(WGPU_NATIVE_RUNTIME_NAME "wgpu_native.dll")
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        set(WGPU_NATIVE_PACKAGE "wgpu-linux-${WGPU_BIN_ARCHITECTURE}-release.zip")
+        set(WGPU_NATIVE_LIB_NAME "libwgpu_native.so")
+        set(WGPU_NATIVE_RUNTIME_NAME "${WGPU_NATIVE_LIB_NAME}")
+    elseif(APPLE)
+        set(WGPU_NATIVE_PACKAGE "wgpu-macos-${WGPU_BIN_ARCHITECTURE}-release.zip")
+        set(WGPU_NATIVE_LIB_NAME "libwgpu_native.dylib")
+        set(WGPU_NATIVE_RUNTIME_NAME "${WGPU_NATIVE_LIB_NAME}")
+    endif()
+
+    fetchcontent_declare(
+        wgpu_native
+        DOWNLOAD_EXTRACT_TIMESTAMP 1
+        DOWNLOAD_NO_PROGRESS 1
+        SOURCE_SUBDIR "ignore CMakeLists.txt"
+        URL "https://github.com/gfx-rs/wgpu-native/releases/download/${NRI_WGPU_VERSION}/${WGPU_NATIVE_PACKAGE}"
+    )
+    list(APPEND DEPS wgpu_native)
 endif()
 
 if(NRI_ENABLE_AMDAGS)
@@ -221,7 +269,7 @@ if(NRI_ENABLE_AMDAGS)
         DOWNLOAD_EXTRACT_TIMESTAMP 1
         DOWNLOAD_NO_PROGRESS 1
         SOURCE_SUBDIR "ignore CMakeLists.txt"
-        URL https://github.com/GPUOpen-LibrariesAndSDKs/AGS_SDK/archive/refs/tags/v6.3.0.zip
+        URL "https://github.com/GPUOpen-LibrariesAndSDKs/AGS_SDK/archive/refs/tags/v6.3.1.zip"
     )
     list(APPEND DEPS amdags)
 endif()
@@ -237,7 +285,7 @@ if(NRI_ENABLE_NVAPI)
             DOWNLOAD_EXTRACT_TIMESTAMP 1
             DOWNLOAD_NO_PROGRESS 1
             SOURCE_SUBDIR "ignore CMakeLists.txt"
-            URL https://github.com/NVIDIA/nvapi/archive/9296d671e71608d6d6b7749ed93989af4ada8858.zip
+            URL "https://github.com/NVIDIA/nvapi/archive/70d337db9186e968eab622f7e786de7e437faf3d.zip"
         )
         list(APPEND DEPS nvapi)
     endif()
@@ -251,7 +299,7 @@ if(NRI_ENABLE_SHADERMAKE AND NOT TARGET ShaderMake)
         shadermake
         DOWNLOAD_EXTRACT_TIMESTAMP 1
         DOWNLOAD_NO_PROGRESS 1
-        URL https://github.com/NVIDIA-RTX/ShaderMake/archive/18f5a344e7ca8fa65daaf079d07bc8ce38453e05.zip
+        URL "https://github.com/NVIDIA-RTX/ShaderMake/archive/3f01623a76b092ac127d2debd79a672f55d77665.zip"
     )
     list(APPEND DEPS shadermake)
 endif()
@@ -333,6 +381,7 @@ if(NRI_ENABLE_NGX_SDK)
 endif()
 
 set(SHARED_SOURCE
+    "Source/NRIConfig.h"
     "Source/Shared/DeviceBase.h"
     "Source/Shared/HelperInterface.h"
     "Source/Shared/HelperInterface.hpp"
@@ -348,6 +397,7 @@ set(SHARED_SOURCE
     "Source/Shared/StreamerInterface.hpp"
     "Source/Shared/UpscalerInterface.h"
     "Source/Shared/UpscalerInterface.hpp"
+    "Source/Shared/SharedVideo.h"
 )
 
 add_library(NRI_Shared STATIC)
@@ -466,6 +516,8 @@ if(NRI_ENABLE_D3D11_SUPPORT)
         "Source/D3D11/FenceD3D11.hpp"
         "Source/D3D11/ImplD3D11.cpp"
         "Source/D3D11/MemoryD3D11.h"
+        "Source/D3D11/PipelineCacheD3D11.h"
+        "Source/D3D11/PipelineCacheD3D11.hpp"
         "Source/D3D11/PipelineD3D11.h"
         "Source/D3D11/PipelineD3D11.hpp"
         "Source/D3D11/PipelineLayoutD3D11.h"
@@ -495,8 +547,12 @@ if(NRI_ENABLE_D3D11_SUPPORT)
     )
     target_include_directories(NRI_D3D11
         PRIVATE
-            "${nvapi_SOURCE_DIR}"
-            "${amdags_SOURCE_DIR}/ags_lib/inc"
+            $<$<BOOL:${NRI_ENABLE_NVAPI}>:
+                "${nvapi_SOURCE_DIR}"
+            >
+            $<$<BOOL:${NRI_ENABLE_AMDAGS}>:
+                "${amdags_SOURCE_DIR}/ags_lib/inc"
+            >
     )
     target_link_libraries(NRI_D3D11
         PRIVATE
@@ -535,6 +591,8 @@ if(NRI_ENABLE_D3D12_SUPPORT)
         "Source/D3D12/CommandBufferD3D12.hpp"
         "Source/D3D12/DescriptorD3D12.h"
         "Source/D3D12/DescriptorD3D12.hpp"
+        "Source/D3D12/DescriptorHeapD3D12.h"
+        "Source/D3D12/DescriptorHeapD3D12.hpp"
         "Source/D3D12/DescriptorPoolD3D12.h"
         "Source/D3D12/DescriptorPoolD3D12.hpp"
         "Source/D3D12/DescriptorSetD3D12.h"
@@ -549,6 +607,8 @@ if(NRI_ENABLE_D3D12_SUPPORT)
         "Source/D3D12/MemoryD3D12.hpp"
         "Source/D3D12/MicromapD3D12.h"
         "Source/D3D12/MicromapD3D12.hpp"
+        "Source/D3D12/PipelineCacheD3D12.h"
+        "Source/D3D12/PipelineCacheD3D12.hpp"
         "Source/D3D12/PipelineD3D12.h"
         "Source/D3D12/PipelineD3D12.hpp"
         "Source/D3D12/PipelineLayoutD3D12.h"
@@ -563,6 +623,15 @@ if(NRI_ENABLE_D3D12_SUPPORT)
         "Source/D3D12/SwapChainD3D12.hpp"
         "Source/D3D12/TextureD3D12.h"
         "Source/D3D12/TextureD3D12.hpp"
+        "Source/D3D12/TransferContextD3D12.h"
+        "Source/D3D12/TransferContextD3D12.hpp"
+        "Source/D3D12/VideoHelpersD3D12.h"
+        "Source/D3D12/VideoPictureD3D12.h"
+        "Source/D3D12/VideoPictureD3D12.hpp"
+        "Source/D3D12/VideoSessionD3D12.h"
+        "Source/D3D12/VideoSessionD3D12.hpp"
+        "Source/D3D12/VideoSessionParametersD3D12.h"
+        "Source/D3D12/VideoSessionParametersD3D12.hpp"
     )
 
     add_library(NRI_D3D12 STATIC)
@@ -581,8 +650,12 @@ if(NRI_ENABLE_D3D12_SUPPORT)
         PRIVATE
             "${d3d12ma_SOURCE_DIR}/include"
             "${d3d12ma_SOURCE_DIR}/src"
-            "${nvapi_SOURCE_DIR}"
-            "${amdags_SOURCE_DIR}/ags_lib/inc"
+            $<$<BOOL:${NRI_ENABLE_NVAPI}>:
+                "${nvapi_SOURCE_DIR}"
+            >
+            $<$<BOOL:${NRI_ENABLE_AMDAGS}>:
+                "${amdags_SOURCE_DIR}/ags_lib/inc"
+            >
             $<$<BOOL:${NRI_ENABLE_AGILITY_SDK_SUPPORT}>:
                 ${agilitysdk_SOURCE_DIR}/build/native/include
             >
@@ -655,6 +728,8 @@ if(NRI_ENABLE_VK_SUPPORT)
         "Source/VK/DescriptorSetVK.hpp"
         "Source/VK/DescriptorVK.h"
         "Source/VK/DescriptorVK.hpp"
+        "Source/VK/DescriptorHeapVK.h"
+        "Source/VK/DescriptorHeapVK.hpp"
         "Source/VK/DeviceVK.h"
         "Source/VK/DeviceVK.hpp"
         "Source/VK/DispatchTable.h"
@@ -666,6 +741,8 @@ if(NRI_ENABLE_VK_SUPPORT)
         "Source/VK/MemoryVK.hpp"
         "Source/VK/MicromapVK.h"
         "Source/VK/MicromapVK.hpp"
+        "Source/VK/PipelineCacheVK.h"
+        "Source/VK/PipelineCacheVK.hpp"
         "Source/VK/PipelineLayoutVK.h"
         "Source/VK/PipelineLayoutVK.hpp"
         "Source/VK/PipelineVK.h"
@@ -679,6 +756,15 @@ if(NRI_ENABLE_VK_SUPPORT)
         "Source/VK/SwapChainVK.hpp"
         "Source/VK/TextureVK.h"
         "Source/VK/TextureVK.hpp"
+        "Source/VK/TransferContextVK.h"
+        "Source/VK/TransferContextVK.hpp"
+        "Source/VK/VideoHelpersVK.h"
+        "Source/VK/VideoPictureVK.h"
+        "Source/VK/VideoPictureVK.hpp"
+        "Source/VK/VideoSessionVK.h"
+        "Source/VK/VideoSessionVK.hpp"
+        "Source/VK/VideoSessionParametersVK.h"
+        "Source/VK/VideoSessionParametersVK.hpp"
     )
 
     add_library(NRI_VK STATIC)
@@ -700,6 +786,9 @@ if(NRI_ENABLE_VK_SUPPORT)
             $<$<BOOL:${APPLE}>:
                 VK_USE_PLATFORM_METAL_EXT;VK_ENABLE_BETA_EXTENSIONS
             >
+            $<$<BOOL:${ANDROID}>:
+                VK_USE_PLATFORM_ANDROID_KHR
+            >
             $<$<BOOL:${NRI_ENABLE_XLIB_SUPPORT}>:
                 VK_USE_PLATFORM_XLIB_KHR
             >
@@ -720,6 +809,66 @@ if(NRI_ENABLE_VK_SUPPORT)
     )
 endif()
 
+# WGPU
+if(NRI_ENABLE_WGPU_SUPPORT)
+    set(WGPU_SOURCE
+        "Source/WGPU/BufferWGPU.h"
+        "Source/WGPU/BufferWGPU.hpp"
+        "Source/WGPU/CommandAllocatorWGPU.h"
+        "Source/WGPU/CommandAllocatorWGPU.hpp"
+        "Source/WGPU/CommandBufferWGPU.h"
+        "Source/WGPU/CommandBufferWGPU.hpp"
+        "Source/WGPU/DescriptorPoolWGPU.h"
+        "Source/WGPU/DescriptorPoolWGPU.hpp"
+        "Source/WGPU/DescriptorSetWGPU.h"
+        "Source/WGPU/DescriptorSetWGPU.hpp"
+        "Source/WGPU/DescriptorWGPU.h"
+        "Source/WGPU/DescriptorWGPU.hpp"
+        "Source/WGPU/DeviceWGPU.h"
+        "Source/WGPU/DeviceWGPU.hpp"
+        "Source/WGPU/FenceWGPU.h"
+        "Source/WGPU/FenceWGPU.hpp"
+        "Source/WGPU/ImplWGPU.cpp"
+        "Source/WGPU/MemoryWGPU.h"
+        "Source/WGPU/MemoryWGPU.hpp"
+        "Source/WGPU/PipelineCacheWGPU.h"
+        "Source/WGPU/PipelineCacheWGPU.hpp"
+        "Source/WGPU/PipelineLayoutWGPU.h"
+        "Source/WGPU/PipelineLayoutWGPU.hpp"
+        "Source/WGPU/PipelineWGPU.h"
+        "Source/WGPU/PipelineWGPU.hpp"
+        "Source/WGPU/QueryPoolWGPU.h"
+        "Source/WGPU/QueryPoolWGPU.hpp"
+        "Source/WGPU/QueueWGPU.h"
+        "Source/WGPU/QueueWGPU.hpp"
+        "Source/WGPU/SharedWGPU.h"
+        "Source/WGPU/SharedWGPU.hpp"
+        "Source/WGPU/SwapChainWGPU.h"
+        "Source/WGPU/SwapChainWGPU.hpp"
+        "Source/WGPU/TextureWGPU.h"
+        "Source/WGPU/TextureWGPU.hpp"
+    )
+
+    add_library(NRI_WGPU STATIC)
+    target_sources(NRI_WGPU
+        PRIVATE
+            ${WGPU_SOURCE}
+    )
+    target_include_directories(NRI_WGPU
+        PRIVATE
+            "${wgpu_native_SOURCE_DIR}/include"
+    )
+    target_link_libraries(NRI_WGPU
+        PRIVATE
+            NRI_Shared
+            "${wgpu_native_SOURCE_DIR}/lib/${WGPU_NATIVE_LIB_NAME}"
+    )
+    set_target_properties(NRI_WGPU
+        PROPERTIES
+            FOLDER "NRI"
+    )
+endif()
+
 # Validation
 if(NRI_ENABLE_VALIDATION_SUPPORT)
     set(NRI_VALIDATION_SOURCE
@@ -734,6 +883,8 @@ if(NRI_ENABLE_VALIDATION_SUPPORT)
         "Source/Validation/ConversionVal.hpp"
         "Source/Validation/DescriptorPoolVal.h"
         "Source/Validation/DescriptorPoolVal.hpp"
+        "Source/Validation/DescriptorHeapVal.h"
+        "Source/Validation/DescriptorHeapVal.hpp"
         "Source/Validation/DescriptorSetVal.h"
         "Source/Validation/DescriptorSetVal.hpp"
         "Source/Validation/DescriptorVal.h"
@@ -747,6 +898,8 @@ if(NRI_ENABLE_VALIDATION_SUPPORT)
         "Source/Validation/MemoryVal.hpp"
         "Source/Validation/MicromapVal.h"
         "Source/Validation/MicromapVal.hpp"
+        "Source/Validation/PipelineCacheVal.h"
+        "Source/Validation/PipelineCacheVal.hpp"
         "Source/Validation/PipelineLayoutVal.h"
         "Source/Validation/PipelineLayoutVal.hpp"
         "Source/Validation/PipelineVal.h"
@@ -760,6 +913,12 @@ if(NRI_ENABLE_VALIDATION_SUPPORT)
         "Source/Validation/SwapChainVal.hpp"
         "Source/Validation/TextureVal.h"
         "Source/Validation/TextureVal.hpp"
+        "Source/Validation/VideoPictureVal.h"
+        "Source/Validation/VideoPictureVal.hpp"
+        "Source/Validation/VideoSessionParametersVal.h"
+        "Source/Validation/VideoSessionParametersVal.hpp"
+        "Source/Validation/VideoSessionVal.h"
+        "Source/Validation/VideoSessionVal.hpp"
     )
 
     add_library(NRI_Validation STATIC)
@@ -795,6 +954,7 @@ set_source_files_properties(${NRI_HEADERS}
 
 # Extensions headers
 set(NRI_EXTENSIONS
+    "Include/Extensions/NRIDescriptorHeap.h"
     "Include/Extensions/NRIDeviceCreation.h"
     "Include/Extensions/NRIHelper.h"
     "Include/Extensions/NRIImgui.h"
@@ -804,6 +964,7 @@ set(NRI_EXTENSIONS
     "Include/Extensions/NRIStreamer.h"
     "Include/Extensions/NRISwapChain.h"
     "Include/Extensions/NRIUpscaler.h"
+    "Include/Extensions/NRIVideo.h"
     "Include/Extensions/NRIWrapperD3D11.h"
     "Include/Extensions/NRIWrapperD3D12.h"
     "Include/Extensions/NRIWrapperVK.h"
@@ -835,7 +996,7 @@ if(NRI_STATIC_LIBRARY)
 else()
     add_library(NRI SHARED)
 
-    if(CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
         target_link_options(NRI
             PRIVATE
                 $<$<CONFIG:Release>:/DEBUG> # generate a PDB for Release build
@@ -850,14 +1011,19 @@ target_sources(NRI
         ${NRI_HEADERS}
         ${NRI_RESOURCES}
         ${NRI_EXTENSIONS}
-        $<$<CXX_COMPILER_FRONTEND_VARIANT:MSVC>:
-            nri.natvis
-        > # debugger markup
+        $<$<CXX_COMPILER_FRONTEND_VARIANT:MSVC>:nri.natvis> # debugger markup
 )
 target_include_directories(NRI
     PRIVATE
-        "${nvtx_SOURCE_DIR}/c/include/"
-        "${vulkan_headers_SOURCE_DIR}/include"
+        $<$<BOOL:${NRI_ENABLE_NVTX_SUPPORT}>:
+            "${nvtx_SOURCE_DIR}/c/include/"
+        >
+        $<$<BOOL:${NRI_ENABLE_VK_SUPPORT}>:
+            "${vulkan_headers_SOURCE_DIR}/include"
+        >
+        $<$<BOOL:${NRI_ENABLE_WGPU_SUPPORT}>:
+            "${wgpu_native_SOURCE_DIR}/include"
+        >
     PUBLIC
         "Include"
 )
@@ -894,6 +1060,9 @@ target_link_libraries(NRI
         $<$<BOOL:${NRI_ENABLE_VK_SUPPORT}>:
             NRI_VK
         >
+        $<$<BOOL:${NRI_ENABLE_WGPU_SUPPORT}>:
+            NRI_WGPU
+        >
         $<$<BOOL:${NRI_ENABLE_VALIDATION_SUPPORT}>:
             NRI_Validation
         >
@@ -924,6 +1093,14 @@ if(NRI_ENABLE_AGILITY_SDK_SUPPORT)
     add_custom_command(TARGET NRI
         POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different "${agilitysdk_SOURCE_DIR}/build/native/bin/${BIN_ARCHITECTURE}" "$<TARGET_FILE_DIR:${PROJECT_NAME}>/${NRI_AGILITY_SDK_DIR}"
+        VERBATIM
+    )
+endif()
+
+if(NRI_ENABLE_WGPU_SUPPORT)
+    add_custom_command(TARGET NRI
+        POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${wgpu_native_SOURCE_DIR}/lib/${WGPU_NATIVE_RUNTIME_NAME}" "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
         VERBATIM
     )
 endif()
@@ -1029,7 +1206,7 @@ if(NRI_ENABLE_SHADERMAKE)
     if(NRI_ENABLE_D3D12_SUPPORT)
         list(APPEND SHADERMAKE_COMMANDS COMMAND ${SHADERMAKE_PATH} -p DXIL --compiler "${SHADERMAKE_DXC_PATH}" ${SHADERMAKE_GENERAL_ARGS})
     endif()
-    if(NRI_ENABLE_VK_SUPPORT)
+    if(NRI_ENABLE_VK_SUPPORT OR NRI_ENABLE_WGPU_SUPPORT)
         list(APPEND SHADERMAKE_COMMANDS COMMAND ${SHADERMAKE_PATH} -p SPIRV --compiler "${SHADERMAKE_DXC_VK_PATH}" ${SHADERMAKE_GENERAL_ARGS})
     endif()
     list(APPEND SHADERMAKE_COMMANDS "") # fix for "The system cannot find the batch label specified - VCEnd"

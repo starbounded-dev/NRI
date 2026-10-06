@@ -5,7 +5,7 @@ MicromapD3D12::~MicromapD3D12() {
 }
 
 Result MicromapD3D12::Create(const MicromapDesc& micromapDesc) {
-#ifdef NRI_D3D12_HAS_OPACITY_MICROMAP
+#if NRI_ENABLE_AGILITY_SDK_SUPPORT
     static_assert((uint32_t)MicromapFormat::OPACITY_2_STATE == D3D12_RAYTRACING_OPACITY_MICROMAP_FORMAT_OC1_2_STATE, "Type mismatch");
     static_assert((uint32_t)MicromapFormat::OPACITY_4_STATE == D3D12_RAYTRACING_OPACITY_MICROMAP_FORMAT_OC1_4_STATE, "Type mismatch");
 
@@ -54,7 +54,7 @@ void MicromapD3D12::GetMemoryDesc(MemoryLocation memoryLocation, MemoryDesc& mem
     bufferDesc.size = m_PrebuildInfo.ResultDataMaxSizeInBytes;
     bufferDesc.usage = BufferUsageBits::MICROMAP_STORAGE;
 
-    D3D12_RESOURCE_DESC resourceDesc = {};
+    D3D12_RESOURCE_DESC1 resourceDesc = {};
     m_Device.GetResourceDesc(bufferDesc, resourceDesc);
     m_Device.GetMemoryDesc(memoryLocation, resourceDesc, memoryDesc);
 }

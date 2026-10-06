@@ -2,7 +2,7 @@
 
 constexpr uint32_t PRESENT_MODE_MAX_NUM = 16;
 
-constexpr VkPresentGravityFlagBitsKHR GetGravity(Gravity gravity) {
+static constexpr VkPresentGravityFlagBitsKHR GetGravity(Gravity gravity) {
     switch (gravity) {
         case Gravity::CENTERED:
             return VK_PRESENT_GRAVITY_CENTERED_BIT_KHR;
@@ -37,109 +37,80 @@ Result SwapChainVK::Create(const SwapChainDesc& swapChainDesc) {
     m_Queue = (QueueVK*)swapChainDesc.queue;
     uint32_t familyIndex = m_Queue->GetFamilyIndex();
 
-    // Create surface
+    { // Create surface
 #ifdef VK_USE_PLATFORM_WIN32_KHR
-    if (swapChainDesc.window.windows.hwnd) {
-        VkWin32SurfaceCreateInfoKHR win32SurfaceInfo = {VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
-        win32SurfaceInfo.hwnd = (HWND)swapChainDesc.window.windows.hwnd;
+        if (swapChainDesc.window.windows.hwnd) {
+            VkWin32SurfaceCreateInfoKHR win32SurfaceInfo = {VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
+            win32SurfaceInfo.hwnd = (HWND)swapChainDesc.window.windows.hwnd;
 
-        VkResult vkResult = vk.CreateWin32SurfaceKHR(m_Device, &win32SurfaceInfo, m_Device.GetVkAllocationCallbacks(), &m_Surface);
-        NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "vkCreateWin32SurfaceKHR");
-    }
+            VkResult vkResult = vk.CreateWin32SurfaceKHR(m_Device, &win32SurfaceInfo, m_Device.GetVkAllocationCallbacks(), &m_Surface);
+            NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "vkCreateWin32SurfaceKHR");
+        }
 #endif
 #ifdef VK_USE_PLATFORM_XLIB_KHR
-    if (swapChainDesc.window.x11.dpy && swapChainDesc.window.x11.window) {
-        VkXlibSurfaceCreateInfoKHR xlibSurfaceInfo = {VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR};
-        xlibSurfaceInfo.dpy = (::Display*)swapChainDesc.window.x11.dpy;
-        xlibSurfaceInfo.window = (::Window)swapChainDesc.window.x11.window;
+        if (swapChainDesc.window.x11.dpy && swapChainDesc.window.x11.window) {
+            VkXlibSurfaceCreateInfoKHR xlibSurfaceInfo = {VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR};
+            xlibSurfaceInfo.dpy = (::Display*)swapChainDesc.window.x11.dpy;
+            xlibSurfaceInfo.window = (::Window)swapChainDesc.window.x11.window;
 
-        VkResult vkResult = vk.CreateXlibSurfaceKHR(m_Device, &xlibSurfaceInfo, m_Device.GetVkAllocationCallbacks(), &m_Surface);
-        NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "vkCreateXlibSurfaceKHR");
-    }
+            VkResult vkResult = vk.CreateXlibSurfaceKHR(m_Device, &xlibSurfaceInfo, m_Device.GetVkAllocationCallbacks(), &m_Surface);
+            NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "vkCreateXlibSurfaceKHR");
+        }
 #endif
 #ifdef VK_USE_PLATFORM_WAYLAND_KHR
-    if (swapChainDesc.window.wayland.display && swapChainDesc.window.wayland.surface) {
-        VkWaylandSurfaceCreateInfoKHR waylandSurfaceInfo = {VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR};
-        waylandSurfaceInfo.display = (wl_display*)swapChainDesc.window.wayland.display;
-        waylandSurfaceInfo.surface = (wl_surface*)swapChainDesc.window.wayland.surface;
+        if (swapChainDesc.window.wayland.display && swapChainDesc.window.wayland.surface) {
+            VkWaylandSurfaceCreateInfoKHR waylandSurfaceInfo = {VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR};
+            waylandSurfaceInfo.display = (wl_display*)swapChainDesc.window.wayland.display;
+            waylandSurfaceInfo.surface = (wl_surface*)swapChainDesc.window.wayland.surface;
 
-        VkResult vkResult = vk.CreateWaylandSurfaceKHR(m_Device, &waylandSurfaceInfo, m_Device.GetVkAllocationCallbacks(), &m_Surface);
-        NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "vkCreateWaylandSurfaceKHR");
-    }
+            VkResult vkResult = vk.CreateWaylandSurfaceKHR(m_Device, &waylandSurfaceInfo, m_Device.GetVkAllocationCallbacks(), &m_Surface);
+            NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "vkCreateWaylandSurfaceKHR");
+        }
 #endif
 #ifdef VK_USE_PLATFORM_METAL_EXT
-    if (swapChainDesc.window.metal.caMetalLayer) {
-        VkMetalSurfaceCreateInfoEXT metalSurfaceCreateInfo = {VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT};
-        metalSurfaceCreateInfo.pLayer = (CAMetalLayer*)swapChainDesc.window.metal.caMetalLayer;
+        if (swapChainDesc.window.metal.caMetalLayer) {
+            VkMetalSurfaceCreateInfoEXT metalSurfaceCreateInfo = {VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT};
+            metalSurfaceCreateInfo.pLayer = (CAMetalLayer*)swapChainDesc.window.metal.caMetalLayer;
 
-        VkResult vkResult = vk.CreateMetalSurfaceEXT(m_Device, &metalSurfaceCreateInfo, m_Device.GetVkAllocationCallbacks(), &m_Surface);
-        NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "vkCreateMetalSurfaceEXT");
-    }
+            VkResult vkResult = vk.CreateMetalSurfaceEXT(m_Device, &metalSurfaceCreateInfo, m_Device.GetVkAllocationCallbacks(), &m_Surface);
+            NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "vkCreateMetalSurfaceEXT");
+        }
 #endif
+#ifdef VK_USE_PLATFORM_ANDROID_KHR
+        {
+            VkAndroidSurfaceCreateInfoKHR androidSurfaceInfo = {VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR};
+            androidSurfaceInfo.window = (ANativeWindow*)swapChainDesc.window.android.nativeWindow;
 
-    // Surface caps
-    std::array<VkPresentModeKHR, PRESENT_MODE_MAX_NUM> lowLatencyPresentModes = {};
-
-    VkLatencySurfaceCapabilitiesNV latencySurfaceCapabilities = {VK_STRUCTURE_TYPE_LATENCY_SURFACE_CAPABILITIES_NV};
-    latencySurfaceCapabilities.presentModeCount = (uint32_t)lowLatencyPresentModes.size();
-    latencySurfaceCapabilities.pPresentModes = lowLatencyPresentModes.data();
-
-    bool allowLowLatency = m_Device.GetDesc().features.lowLatency && (swapChainDesc.flags & SwapChainBits::ALLOW_LOW_LATENCY);
-
-    uint32_t textureNum = swapChainDesc.textureNum;
-    Dim_t width = swapChainDesc.width;
-    Dim_t height = swapChainDesc.height;
-    {
+            VkResult vkResult = vk.CreateAndroidSurfaceKHR(m_Device, &androidSurfaceInfo, m_Device.GetVkAllocationCallbacks(), &m_Surface);
+            NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "vkCreateAndroidSurfaceKHR");
+        }
+#endif
         VkBool32 supported = VK_FALSE;
         VkResult vkResult = vk.GetPhysicalDeviceSurfaceSupportKHR(m_Device, familyIndex, m_Surface, &supported);
         NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "GetPhysicalDeviceSurfaceSupportKHR");
 
         NRI_RETURN_ON_FAILURE(&m_Device, supported, Result::FAILURE, "Surface is not supported");
+    }
 
+    // Low latency
+    std::array<VkPresentModeKHR, PRESENT_MODE_MAX_NUM> lowLatencyPresentModes = {};
+
+    VkLatencySurfaceCapabilitiesNV latencySurfaceCaps = {VK_STRUCTURE_TYPE_LATENCY_SURFACE_CAPABILITIES_NV};
+    latencySurfaceCaps.presentModeCount = (uint32_t)lowLatencyPresentModes.size();
+    latencySurfaceCaps.pPresentModes = lowLatencyPresentModes.data();
+
+    bool allowLowLatency = m_Device.GetDesc().features.lowLatency && (swapChainDesc.flags & SwapChainBits::ALLOW_LOW_LATENCY);
+    if (allowLowLatency) {
         VkPhysicalDeviceSurfaceInfo2KHR surfaceInfo = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR};
         surfaceInfo.surface = m_Surface;
 
-        VkSurfaceCapabilities2KHR caps2 = {VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR};
-        PNEXTCHAIN_DECLARE(caps2.pNext);
+        VkSurfaceCapabilities2KHR surfaceCaps2 = {VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR};
 
-        if (allowLowLatency) {
-            PNEXTCHAIN_APPEND_STRUCT(latencySurfaceCapabilities);
-        }
+        PNEXTCHAIN_DECLARE(surfaceCaps2.pNext);
+        PNEXTCHAIN_APPEND_STRUCT(latencySurfaceCaps);
 
-        vkResult = vk.GetPhysicalDeviceSurfaceCapabilities2KHR(m_Device, &surfaceInfo, &caps2);
+        VkResult vkResult = vk.GetPhysicalDeviceSurfaceCapabilities2KHR(m_Device, &surfaceInfo, &surfaceCaps2);
         NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "vkGetPhysicalDeviceSurfaceCapabilities2KHR");
-
-        const VkSurfaceCapabilitiesKHR& surfaceCaps = caps2.surfaceCapabilities;
-
-        // X11 pins min/max/currentExtent to the live window size, so a requested extent that's stale
-        // (WM resized the window since the caller sampled it) would abort here. Snap to currentExtent
-        // when the surface gives one, otherwise clamp into range. Same idea as the textureNum clamp below.
-        constexpr uint32_t UNDEFINED_EXTENT = 0xFFFFFFFF; // "swapchain drives the surface size" (see spec)
-        if (surfaceCaps.currentExtent.width != UNDEFINED_EXTENT && surfaceCaps.currentExtent.height != UNDEFINED_EXTENT) {
-            width = static_cast<Dim_t>(surfaceCaps.currentExtent.width);
-            height = static_cast<Dim_t>(surfaceCaps.currentExtent.height);
-        } else {
-            if (width < surfaceCaps.minImageExtent.width)
-                width = static_cast<Dim_t>(surfaceCaps.minImageExtent.width);
-            if (width > surfaceCaps.maxImageExtent.width)
-                width = static_cast<Dim_t>(surfaceCaps.maxImageExtent.width);
-            if (height < surfaceCaps.minImageExtent.height)
-                height = static_cast<Dim_t>(surfaceCaps.minImageExtent.height);
-            if (height > surfaceCaps.maxImageExtent.height)
-                height = static_cast<Dim_t>(surfaceCaps.maxImageExtent.height);
-        }
-
-        if (width != swapChainDesc.width || height != swapChainDesc.height)
-            NRI_REPORT_WARNING(&m_Device, "'swapChainDesc' extent %ux%u clamped to %ux%u", swapChainDesc.width, swapChainDesc.height, width, height);
-
-        // Silently clamp "textureNum" to the supported range
-        if (textureNum < surfaceCaps.minImageCount)
-            textureNum = surfaceCaps.minImageCount;
-        if (surfaceCaps.maxImageCount && textureNum > surfaceCaps.maxImageCount) // 0 - unlimited (see spec)
-            textureNum = surfaceCaps.maxImageCount;
-
-        if (textureNum != swapChainDesc.textureNum)
-            NRI_REPORT_WARNING(&m_Device, "'swapChainDesc.textureNum=%u' clamped to %u", swapChainDesc.textureNum, textureNum);
     }
 
     // Surface format
@@ -251,7 +222,6 @@ Result SwapChainVK::Create(const SwapChainDesc& swapChainDesc) {
             MAILBOX                    Y       No tearing, but almost uncapped FPS
             FIFO_LATEST_READY          Y       Similar to MAILBOX, but offers lower latency
     */
-
     VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR; // the only one 100% supported (see spec)
     {
         uint32_t surfacePresentModeNum = PRESENT_MODE_MAX_NUM;
@@ -283,7 +253,7 @@ Result SwapChainVK::Create(const SwapChainDesc& swapChainDesc) {
         uint32_t availableModeNum = surfacePresentModeNum;
         if (allowLowLatency) {
             availableModes = lowLatencyPresentModes.data();
-            availableModeNum = latencySurfaceCapabilities.presentModeCount;
+            availableModeNum = latencySurfaceCaps.presentModeCount;
         }
 
         bool isFound = false;
@@ -297,33 +267,82 @@ Result SwapChainVK::Create(const SwapChainDesc& swapChainDesc) {
         }
     }
 
-    // Scaling mode
+    // Scaling mode and caps
     bool isScalingSupported = false;
-    if (m_Device.m_IsSupported.swapChainMaintenance1) {
+    uint32_t textureNum = swapChainDesc.textureNum;
+    Dim_t width = swapChainDesc.width;
+    Dim_t height = swapChainDesc.height;
+    VkSurfaceTransformFlagBitsKHR preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    VkCompositeAlphaFlagBitsKHR compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    VkImageUsageFlags swapchainImageUsageFlags = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    {
         VkPhysicalDeviceSurfaceInfo2KHR surfaceInfo = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR};
         surfaceInfo.surface = m_Surface;
 
-        VkSurfaceCapabilities2KHR surfaceCapabilities2 = {VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR};
-        PNEXTCHAIN_DECLARE(surfaceCapabilities2.pNext);
-
-        VkSurfacePresentScalingCapabilitiesKHR surfacePresentScalingCapabilities = {VK_STRUCTURE_TYPE_SURFACE_PRESENT_SCALING_CAPABILITIES_KHR};
-        PNEXTCHAIN_APPEND_STRUCT(surfacePresentScalingCapabilities);
-
         VkSurfacePresentModeKHR surfacePresentMode = {VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_KHR};
         surfacePresentMode.presentMode = presentMode;
-        surfaceInfo.pNext = &surfacePresentMode;
 
-        VkResult vkResult = vk.GetPhysicalDeviceSurfaceCapabilities2KHR(m_Device, &surfaceInfo, &surfaceCapabilities2);
+        VkSurfaceCapabilities2KHR surfaceCaps2 = {VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR};
+
+        VkSurfacePresentScalingCapabilitiesKHR surfacePresentScalingCaps = {VK_STRUCTURE_TYPE_SURFACE_PRESENT_SCALING_CAPABILITIES_KHR};
+
+        PNEXTCHAIN_DECLARE(surfaceCaps2.pNext);
+        if (m_Device.m_IsSupported.swapChainMaintenance1)
+            PNEXTCHAIN_APPEND_STRUCT(surfacePresentScalingCaps);
+
+        PNEXTCHAIN_SET(surfaceInfo.pNext);
+        if (m_Device.m_IsSupported.swapChainMaintenance1)
+            PNEXTCHAIN_APPEND_STRUCT(surfacePresentMode);
+
+        VkResult vkResult = vk.GetPhysicalDeviceSurfaceCapabilities2KHR(m_Device, &surfaceInfo, &surfaceCaps2);
         NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "vkGetPhysicalDeviceSurfaceCapabilities2KHR");
 
-        // TODO: that's the minimal check
-        if (surfacePresentScalingCapabilities.supportedPresentScaling != 0 && surfacePresentScalingCapabilities.supportedPresentGravityX != 0 && surfacePresentScalingCapabilities.supportedPresentGravityY != 0)
+        // Caps
+        const VkSurfaceCapabilitiesKHR& surfaceCaps = surfaceCaps2.surfaceCapabilities;
+        // (Lux/Hazel patch) X11 pins min/max/currentExtent to the live window size, so a requested extent
+        // that's stale (the WM resized the window since the caller sampled it) would abort here. Snap to
+        // currentExtent when the surface gives one, otherwise clamp into range. Same idea as the
+        // textureNum clamp below.
+        constexpr uint32_t UNDEFINED_EXTENT = 0xFFFFFFFF; // "swapchain drives the surface size" (see spec)
+        if (surfaceCaps.currentExtent.width != UNDEFINED_EXTENT && surfaceCaps.currentExtent.height != UNDEFINED_EXTENT) {
+            width = (Dim_t)surfaceCaps.currentExtent.width;
+            height = (Dim_t)surfaceCaps.currentExtent.height;
+        } else {
+            width = (Dim_t)std::clamp((uint32_t)width, surfaceCaps.minImageExtent.width, surfaceCaps.maxImageExtent.width);
+            height = (Dim_t)std::clamp((uint32_t)height, surfaceCaps.minImageExtent.height, surfaceCaps.maxImageExtent.height);
+        }
+
+        if (width != swapChainDesc.width || height != swapChainDesc.height)
+            NRI_REPORT_WARNING(&m_Device, "'swapChainDesc' extent %ux%u clamped to %ux%u", swapChainDesc.width, swapChainDesc.height, width, height);
+
+        // Silently clamp "textureNum" to the supported range
+        if (textureNum < surfaceCaps.minImageCount)
+            textureNum = surfaceCaps.minImageCount;
+        if (surfaceCaps.maxImageCount && textureNum > surfaceCaps.maxImageCount) // 0 - unlimited (see spec)
+            textureNum = surfaceCaps.maxImageCount;
+
+        if (textureNum != swapChainDesc.textureNum)
+            NRI_REPORT_WARNING(&m_Device, "'swapChainDesc.textureNum=%u' clamped to %u", swapChainDesc.textureNum, textureNum);
+
+        if (!(surfaceCaps.supportedTransforms & preTransform))
+            preTransform = surfaceCaps.currentTransform;
+
+        if (!(surfaceCaps.supportedCompositeAlpha & compositeAlpha)) {
+            if (surfaceCaps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR)
+                compositeAlpha = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
+            else if (surfaceCaps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR)
+                compositeAlpha = VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR;
+            else
+                compositeAlpha = VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR;
+        }
+
+        // VK guarantees only COLOR_ATTACHMENT usage for swap chain images; transfer usages are optional
+        swapchainImageUsageFlags |= surfaceCaps.supportedUsageFlags & (VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+
+        // TODO: that's the minimal check to detect scaling support
+        if (surfacePresentScalingCaps.supportedPresentScaling != 0 && surfacePresentScalingCaps.supportedPresentGravityX != 0 && surfacePresentScalingCaps.supportedPresentGravityY != 0)
             isScalingSupported = true;
     }
-
-    constexpr VkImageUsageFlags swapchainImageUsageFlags = VK_IMAGE_USAGE_TRANSFER_SRC_BIT
-        | VK_IMAGE_USAGE_TRANSFER_DST_BIT
-        | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
     { // Swap chain
         VkSwapchainCreateInfoKHR swapchainInfo = {VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
@@ -338,8 +357,8 @@ Result SwapChainVK::Create(const SwapChainDesc& swapChainDesc) {
         swapchainInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
         swapchainInfo.queueFamilyIndexCount = 1;
         swapchainInfo.pQueueFamilyIndices = &familyIndex;
-        swapchainInfo.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
-        swapchainInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+        swapchainInfo.preTransform = preTransform;
+        swapchainInfo.compositeAlpha = compositeAlpha;
         swapchainInfo.presentMode = presentMode;
         PNEXTCHAIN_DECLARE(swapchainInfo.pNext);
 
@@ -385,9 +404,8 @@ Result SwapChainVK::Create(const SwapChainDesc& swapChainDesc) {
         VkSwapchainLatencyCreateInfoNV latencyCreateInfo = {VK_STRUCTURE_TYPE_SWAPCHAIN_LATENCY_CREATE_INFO_NV};
         latencyCreateInfo.latencyModeEnable = allowLowLatency;
 
-        if (allowLowLatency) {
+        if (allowLowLatency)
             PNEXTCHAIN_APPEND_STRUCT(latencyCreateInfo);
-        }
 
         // Create
         VkResult vkResult = vk.CreateSwapchainKHR(m_Device, &swapchainInfo, m_Device.GetVkAllocationCallbacks(), &m_Handle);
@@ -430,8 +448,6 @@ Result SwapChainVK::Create(const SwapChainDesc& swapChainDesc) {
 
     // Finalize
     m_Hwnd = swapChainDesc.window.windows.hwnd;
-    m_PresentId = GetSwapChainId();
-
     m_Flags = swapChainDesc.flags;
     if (!allowLowLatency)
         m_Flags &= ~SwapChainBits::ALLOW_LOW_LATENCY;
@@ -455,10 +471,10 @@ NRI_INLINE Texture* const* SwapChainVK::GetTextures(uint32_t& textureNum) const 
 NRI_INLINE Result SwapChainVK::AcquireNextTexture(FenceVK& acquireSemaphore, uint32_t& textureIndex) {
     ExclusiveScope lock(m_Queue->GetLock());
 
-    // Acquire next image (signal).
+    // Acquire next image (signal)
     VkAcquireNextImageInfoKHR acquireInfo = {VK_STRUCTURE_TYPE_ACQUIRE_NEXT_IMAGE_INFO_KHR};
     acquireInfo.swapchain = m_Handle;
-    acquireInfo.timeout = m_AcquirePolling ? 0 : MsToUs(TIMEOUT_PRESENT);
+    acquireInfo.timeout = m_AcquirePolling ? 0 : MsToUs(NRI_TIMEOUT_PRESENT);
     acquireInfo.semaphore = acquireSemaphore;
     acquireInfo.deviceMask = NODE_MASK;
 
@@ -466,11 +482,11 @@ NRI_INLINE Result SwapChainVK::AcquireNextTexture(FenceVK& acquireSemaphore, uin
     VkResult vkResult = vk.AcquireNextImage2KHR(m_Device, &acquireInfo, &m_TextureIndex);
     NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "AcquireNextImage2KHR");
 
-    // The macro above only rejects negative results, so a timed-out acquire (VK_TIMEOUT, or
-    // VK_NOT_READY for a zero timeout) would fall through as success. Nothing was acquired in that
-    // case: "m_TextureIndex" is left untouched and "acquireSemaphore" has no signal operation
-    // pending, so a submit waiting on it would block the queue forever. VK_SUBOPTIMAL_KHR is a real
-    // acquire and stays a success.
+    // (Lux/Hazel patch) The macro above only rejects negative results, so a timed-out acquire
+    // (VK_TIMEOUT, or VK_NOT_READY for a zero timeout) would fall through as success. Nothing was
+    // acquired in that case: "m_TextureIndex" is left untouched and "acquireSemaphore" has no signal
+    // operation pending, so a submit waiting on it would block the queue forever. VK_SUBOPTIMAL_KHR is
+    // a real acquire and stays a success. After a timeout the next acquires poll (zero timeout).
     if (vkResult != VK_SUCCESS && vkResult != VK_SUBOPTIMAL_KHR) {
         // Only on the transition into polling, or the zero-timeout retries spam one line per frame.
         if (!m_AcquirePolling)
@@ -485,18 +501,18 @@ NRI_INLINE Result SwapChainVK::AcquireNextTexture(FenceVK& acquireSemaphore, uin
     return Result::SUCCESS;
 }
 
-NRI_INLINE Result SwapChainVK::WaitForPresent() {
-    if (!(m_Flags & SwapChainBits::WAITABLE) || GetPresentIndex(m_PresentId) == 0)
+NRI_INLINE Result SwapChainVK::WaitForPresent(uint64_t presentId) {
+    if (!(m_Flags & SwapChainBits::WAITABLE) || presentId == 0)
         return Result::UNSUPPORTED;
 
     const auto& vk = m_Device.GetDispatchTable();
-    VkResult vkResult = vk.WaitForPresentKHR(m_Device, m_Handle, m_PresentId - 1, MsToUs(TIMEOUT_PRESENT));
+    VkResult vkResult = vk.WaitForPresentKHR(m_Device, m_Handle, presentId, MsToUs(NRI_TIMEOUT_PRESENT));
     NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "WaitForPresentKHR");
 
     return Result::SUCCESS;
 }
 
-NRI_INLINE Result SwapChainVK::Present(FenceVK& releaseSemaphore) {
+NRI_INLINE Result SwapChainVK::Present(FenceVK& releaseSemaphore, uint64_t presentIdValue) {
     ExclusiveScope lock(m_Queue->GetLock());
 
     // Present (wait)
@@ -511,21 +527,19 @@ NRI_INLINE Result SwapChainVK::Present(FenceVK& releaseSemaphore) {
 
     VkPresentIdKHR presentId = {VK_STRUCTURE_TYPE_PRESENT_ID_KHR};
     presentId.swapchainCount = 1;
-    presentId.pPresentIds = &m_PresentId;
-
-    m_PresentId++;
+    presentId.pPresentIds = &presentIdValue;
 
     if (m_Device.m_IsSupported.presentId)
         presentInfo.pNext = &presentId;
 
-    if (m_Flags & SwapChainBits::ALLOW_LOW_LATENCY)
-        SetLatencyMarker((LatencyMarker)VK_LATENCY_MARKER_PRESENT_START_NV);
+    if ((m_Flags & SwapChainBits::ALLOW_LOW_LATENCY) && presentIdValue != 0)
+        SetLatencyMarker(presentIdValue, (LatencyMarker)VK_LATENCY_MARKER_PRESENT_START_NV);
 
     const auto& vk = m_Device.GetDispatchTable();
     VkResult vkResult = vk.QueuePresentKHR(*m_Queue, &presentInfo);
 
-    if (m_Flags & SwapChainBits::ALLOW_LOW_LATENCY)
-        SetLatencyMarker((LatencyMarker)VK_LATENCY_MARKER_PRESENT_END_NV);
+    if ((m_Flags & SwapChainBits::ALLOW_LOW_LATENCY) && presentIdValue != 0)
+        SetLatencyMarker(presentIdValue, (LatencyMarker)VK_LATENCY_MARKER_PRESENT_END_NV);
 
     NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "QueuePresentKHR");
 
@@ -545,9 +559,9 @@ NRI_INLINE Result SwapChainVK::SetLatencySleepMode(const LatencySleepMode& laten
     return Result::SUCCESS;
 }
 
-NRI_INLINE Result SwapChainVK::SetLatencyMarker(LatencyMarker latencyMarker) {
+NRI_INLINE Result SwapChainVK::SetLatencyMarker(uint64_t presentId, LatencyMarker latencyMarker) {
     VkSetLatencyMarkerInfoNV markerInfo = {VK_STRUCTURE_TYPE_SET_LATENCY_MARKER_INFO_NV};
-    markerInfo.presentID = m_PresentId;
+    markerInfo.presentID = presentId;
     markerInfo.marker = (VkLatencyMarkerNV)latencyMarker;
 
     const auto& vk = m_Device.GetDispatchTable();
@@ -556,16 +570,16 @@ NRI_INLINE Result SwapChainVK::SetLatencyMarker(LatencyMarker latencyMarker) {
     return Result::SUCCESS;
 }
 
-NRI_INLINE Result SwapChainVK::LatencySleep() {
+NRI_INLINE Result SwapChainVK::LatencySleep(uint64_t presentId) {
     VkLatencySleepInfoNV sleepInfo = {VK_STRUCTURE_TYPE_LATENCY_SLEEP_INFO_NV};
     sleepInfo.signalSemaphore = *m_LatencyFence;
-    sleepInfo.value = m_PresentId;
+    sleepInfo.value = presentId;
 
     const auto& vk = m_Device.GetDispatchTable();
     VkResult vkResult = vk.LatencySleepNV(m_Device, m_Handle, &sleepInfo);
     NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "LatencySleepNV");
 
-    m_LatencyFence->Wait(m_PresentId); // VK_SUCCESS is guaranteed by "NRI_RETURN_ON_BAD_VKRESULT"
+    m_LatencyFence->Wait(presentId); // VK_SUCCESS is guaranteed by "NRI_RETURN_ON_BAD_VKRESULT"
 
     return Result::SUCCESS;
 }

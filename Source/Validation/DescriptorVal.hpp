@@ -7,6 +7,9 @@ DescriptorVal::DescriptorVal(DeviceVal& device, Descriptor* descriptor, Descript
 
 DescriptorVal::DescriptorVal(DeviceVal& device, Descriptor* descriptor, const BufferViewDesc& bufferViewDesc)
     : ObjectVal(device, descriptor) {
+    const BufferVal& bufferVal = *(BufferVal*)bufferViewDesc.buffer;
+    m_RootDescriptorOffsetMax = bufferVal.GetDesc().size - bufferViewDesc.offset - bufferViewDesc.size;
+
     switch (bufferViewDesc.type) {
         case BufferView::BUFFER:
             m_Type = DescriptorTypeExt::BUFFER;
@@ -33,6 +36,8 @@ DescriptorVal::DescriptorVal(DeviceVal& device, Descriptor* descriptor, const Bu
 
 DescriptorVal::DescriptorVal(DeviceVal& device, Descriptor* descriptor, const TextureViewDesc& textureViewDesc)
     : ObjectVal(device, descriptor) {
+    m_Format = textureViewDesc.format;
+
     switch (textureViewDesc.type) {
         case TextureView::TEXTURE:
         case TextureView::TEXTURE_ARRAY:
@@ -52,8 +57,8 @@ DescriptorVal::DescriptorVal(DeviceVal& device, Descriptor* descriptor, const Te
             break;
         case TextureView::DEPTH_STENCIL_ATTACHMENT:
             m_Type = DescriptorTypeExt::DEPTH_STENCIL_ATTACHMENT;
-            m_IsDepthReadonly = (textureViewDesc.readonlyPlanes & PlaneBits::DEPTH) != 0;
-            m_IsStencilReadonly = (textureViewDesc.readonlyPlanes & PlaneBits::STENCIL) != 0;
+            m_IsDepthReadonly = textureViewDesc.planes != PlaneBits::ALL && (textureViewDesc.planes & PlaneBits::DEPTH) == 0;
+            m_IsStencilReadonly = textureViewDesc.planes != PlaneBits::ALL && (textureViewDesc.planes & PlaneBits::STENCIL) == 0;
             break;
         case TextureView::SHADING_RATE_ATTACHMENT:
             m_Type = DescriptorTypeExt::SHADING_RATE_ATTACHMENT;

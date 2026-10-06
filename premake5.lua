@@ -1,9 +1,15 @@
--- NRI (NVIDIA Render Interface) premake5 build
--- Mirrors the CMakeLists.txt structure: NRI-Shared, NRI-VK, NRI-Validation, NRI-NONE, NRI
+-- NRI (NVIDIA Render Interface) premake5 build for LuxEngine.
+-- Mirrors CMakeLists.txt for the parts Lux uses: NRI-Shared, NRI-VK, NRI-Validation, NRI-NONE, NRI.
+-- Not built: D3D11/D3D12 (Lux is Vulkan-only), WGPU, NVTX, the NRIImgui extension and the
+-- upscaler SDKs (NGX/FFX/XeSS/NIS); CMake defaults the SDKs off as well.
+--
+-- Expects the workspace global "outputdir". Vulkan headers are NRI's own (External/VulkanHeaders,
+-- the version CMake fetches): NRI needs newer extensions than the engine's Vulkan SDK may have, and
+-- NRI's public headers carry no Vulkan types, so the engine keeps compiling against its SDK.
 
 local NRI_DIR = path.getabsolute(".")
 
--- Common defines shared across all NRI projects
+-- CMake passes these to every target (COMPILE_DEFINITIONS + NRI_Shared's public defines).
 local NRI_COMMON_DEFINES = {
 	"NRI_STATIC_LIBRARY=1",
 	"NRI_ENABLE_VK_SUPPORT=1",
@@ -26,102 +32,60 @@ local function NRICommonSettings()
 
 	defines(NRI_COMMON_DEFINES)
 
+	includedirs {
+		NRI_DIR .. "/Include",
+		NRI_DIR .. "/Source/Shared",
+	}
+
+	externalincludedirs {
+		NRI_DIR .. "/External/VulkanHeaders/include",
+	}
+
 	filter "system:windows"
 		systemversion "latest"
-		defines {
-			"VK_USE_PLATFORM_WIN32_KHR",
-			-- D3D support can be enabled later
-			-- "NRI_ENABLE_D3D11_SUPPORT=1",
-			-- "NRI_ENABLE_D3D12_SUPPORT=1",
-		}
-	filter {}
-
 	filter "system:linux"
+		-- Window-system support; the matching VK_USE_PLATFORM_* macros are NRI-VK only (as in
+		-- CMake), so no other NRI translation unit pulls in X11's global "Window" typedef.
 		defines {
 			"NRI_ENABLE_XLIB_SUPPORT=1",
-			"VK_USE_PLATFORM_XLIB_KHR",
-			"VK_USE_PLATFORM_WAYLAND_KHR",
-		}
-	filter {}
-
-	filter "system:macosx"
-		defines {
-			"VK_USE_PLATFORM_METAL_EXT",
-			"VK_ENABLE_BETA_EXTENSIONS"
+			"NRI_ENABLE_WAYLAND_SUPPORT=1",
 		}
 	filter {}
 
 	-- Suppress warnings in vendor code
 	filter "action:vs*"
-		disablewarnings {
-			"4100", -- unreferenced formal parameter
-			"4189", -- local variable initialized but not referenced
-			"4127", -- conditional expression is constant
-			"4324", -- structure was padded due to alignment
-			"4068", -- unknown pragma
-		}
-		buildoptions { "/w" } -- Suppress all warnings for vendor code
-	filter {}
-
+		buildoptions { "/w" }
 	filter "toolset:gcc or toolset:clang"
-		buildoptions { "-w" } -- Suppress all warnings for vendor code
+		buildoptions { "-w" }
 	filter {}
 
-	-- Match the engine's runtime library per config so the static lib links
-	-- into Debug and Release targets without an _ITERATOR_DEBUG_LEVEL mismatch
-	filter "configurations:Debug"
+	-- Match the engine's runtime library per config so the static libs link into every Lux
+	-- target without an _ITERATOR_DEBUG_LEVEL mismatch. Optimisation, symbols, LTO and the
+	-- Debug-AS sanitizer come from the workspace filters.
+	filter "configurations:Debug or configurations:Debug-AS"
 		runtime "Debug"
-		symbols "on"
-
-	filter "configurations:Release"
+	filter "configurations:Release or configurations:Dist"
 		runtime "Release"
-		optimize "speed"
-
-	filter "configurations:Dist"
-		runtime "Release"
-		optimize "speed"
-		symbols "off"
 	filter {}
 end
 
 ----------------------------------------------------------------------
--- NRI-Shared: Shared utilities used by all backends
+-- NRI-Shared: helper, streamer, upscaler (stub) and imgui interfaces
 ----------------------------------------------------------------------
 project "NRI-Shared"
 	kind "StaticLib"
 	NRICommonSettings()
 
 	files {
+		NRI_DIR .. "/Source/NRIConfig.h",
 		NRI_DIR .. "/Source/Shared/Shared.cpp",
 		NRI_DIR .. "/Source/Shared/**.h",
 		NRI_DIR .. "/Source/Shared/**.hpp",
 	}
 
-	includedirs {
-		NRI_DIR .. "/Include",
-		NRI_DIR .. "/Source/Shared",
-	}
-
-	-- Vulkan headers needed by SharedExternal.h -> NRIWrapperVK.h
-	externalincludedirs {
-		VULKAN_SDK .. "/Include",
-		VULKAN_SDK .. "/include",
-	}
-
-	-- NGX (DLSS) SDK enables the DLSR/DLRR backends in UpscalerInterface.hpp (the
-	-- only TU that compiles them). Gated on the SDK actually being fetched
-	-- (scripts/Lib/NGX.py; Windows/Linux x64 only) so macOS / no-fetch builds still
-	-- compile — the upscaler then stays a no-op stub (NRIDevice::SupportsUpscaler
-	-- reports false). Keep NGX_VERSION in NGX.py matched to CMakeLists.txt.
-	local NGX_INCLUDE = NRI_DIR .. "/../NGX/include"
-	if (os.target() == "windows" or os.target() == "linux") and os.isfile(NGX_INCLUDE .. "/nvsdk_ngx.h") then
-		defines { "NRI_ENABLE_NGX_SDK=1" }
-		externalincludedirs { NGX_INCLUDE }
-	end
-
 ----------------------------------------------------------------------
 -- NRI-VK: Vulkan backend
--- NOTE: ImplVK.cpp is a single translation unit that #includes all .hpp files
+-- ImplVK.cpp is a single translation unit that #includes every .hpp
 ----------------------------------------------------------------------
 project "NRI-VK"
 	kind "StaticLib"
@@ -131,36 +95,30 @@ project "NRI-VK"
 		NRI_DIR .. "/Source/VK/ImplVK.cpp",
 		NRI_DIR .. "/Source/VK/**.h",
 		NRI_DIR .. "/Source/VK/**.hpp",
+		NRI_DIR .. "/External/VMA/vk_mem_alloc.h",
 	}
 
-	-- Mark .hpp files as not compiled (they are #included by ImplVK.cpp)
-	filter "files:**.hpp"
-		flags { "ExcludeFromBuild" }
-	filter {}
-
-	-- Mark .h files as not compiled
-	filter "files:**.h"
-		flags { "ExcludeFromBuild" }
-	filter {}
-
 	includedirs {
-		NRI_DIR .. "/Include",
-		NRI_DIR .. "/Source/Shared",
 		NRI_DIR .. "/Source/VK",
 	}
 
-	-- VMA header - NRI-specific version (newer than engine's copy)
+	-- The VMA copy CMake pins (VMA_IMPLEMENTATION lives in MemoryAllocatorVK.h).
 	externalincludedirs {
 		NRI_DIR .. "/External/VMA",
-		VULKAN_SDK .. "/Include",
-		VULKAN_SDK .. "/include",
 	}
 
-	links { "NRI-Shared" }
+	filter "system:windows"
+		defines { "VK_USE_PLATFORM_WIN32_KHR" }
+	filter "system:linux"
+		defines {
+			"VK_USE_PLATFORM_XLIB_KHR",
+			"VK_USE_PLATFORM_WAYLAND_KHR",
+		}
+	filter {}
 
 ----------------------------------------------------------------------
--- NRI-Validation: Validation layer
--- NOTE: ImplVal.cpp is a single TU that #includes all .hpp files
+-- NRI-Validation: validation layer over any backend
+-- ImplVal.cpp is a single translation unit that #includes every .hpp
 ----------------------------------------------------------------------
 project "NRI-Validation"
 	kind "StaticLib"
@@ -172,29 +130,12 @@ project "NRI-Validation"
 		NRI_DIR .. "/Source/Validation/**.hpp",
 	}
 
-	filter "files:**.hpp"
-		flags { "ExcludeFromBuild" }
-	filter {}
-
-	filter "files:**.h"
-		flags { "ExcludeFromBuild" }
-	filter {}
-
 	includedirs {
-		NRI_DIR .. "/Include",
-		NRI_DIR .. "/Source/Shared",
 		NRI_DIR .. "/Source/Validation",
 	}
 
-	externalincludedirs {
-		VULKAN_SDK .. "/Include",
-		VULKAN_SDK .. "/include",
-	}
-
-	links { "NRI-Shared" }
-
 ----------------------------------------------------------------------
--- NRI-NONE: Dummy/no-op backend
+-- NRI-NONE: dummy backend
 ----------------------------------------------------------------------
 project "NRI-NONE"
 	kind "StaticLib"
@@ -204,20 +145,9 @@ project "NRI-NONE"
 		NRI_DIR .. "/Source/NONE/ImplNONE.cpp",
 	}
 
-	includedirs {
-		NRI_DIR .. "/Include",
-		NRI_DIR .. "/Source/Shared",
-	}
-
-	externalincludedirs {
-		VULKAN_SDK .. "/Include",
-		VULKAN_SDK .. "/include",
-	}
-
-	links { "NRI-Shared" }
-
 ----------------------------------------------------------------------
--- NRI: Core library (device creation + links all backends)
+-- NRI: device creation and interface lookup
+-- Link order for GNU ld (Dependencies.lua): NRI, NRI-VK, NRI-Validation, NRI-NONE, NRI-Shared.
 ----------------------------------------------------------------------
 project "NRI"
 	kind "StaticLib"
@@ -229,27 +159,6 @@ project "NRI"
 		NRI_DIR .. "/Include/**.hlsl",
 	}
 
-	-- Don't compile header/hlsl files
-	filter "files:**.h"
-		flags { "ExcludeFromBuild" }
-	filter {}
 	filter "files:**.hlsl"
 		flags { "ExcludeFromBuild" }
 	filter {}
-
-	includedirs {
-		NRI_DIR .. "/Include",
-		NRI_DIR .. "/Source/Shared",
-	}
-
-	externalincludedirs {
-		VULKAN_SDK .. "/Include",
-		VULKAN_SDK .. "/include",
-	}
-
-	links {
-		"NRI-Shared",
-		"NRI-VK",
-		"NRI-Validation",
-		"NRI-NONE",
-	}

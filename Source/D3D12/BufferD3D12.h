@@ -3,16 +3,12 @@
 #pragma once
 
 #if NRI_ENABLE_AGILITY_SDK_SUPPORT
-struct ID3D12Resource2;
 typedef ID3D12Resource2 ID3D12ResourceBest;
 #else
-struct ID3D12Resource;
 typedef ID3D12Resource ID3D12ResourceBest;
 #endif
 
 namespace nri {
-
-struct MemoryD3D12;
 
 struct BufferD3D12 final : public DebugNameBase {
     inline BufferD3D12(DeviceD3D12& device)
@@ -58,7 +54,7 @@ struct BufferD3D12 final : public DebugNameBase {
     void* Map(uint64_t offset);
 
 private:
-    Result SetPriorityAndPersistentlyMap(float priority, const D3D12_HEAP_PROPERTIES& heapProps);
+    Result SetPriorityAndPersistentlyMap(float priority, bool committed, const D3D12_HEAP_PROPERTIES& heapProps);
 
 private:
     DeviceD3D12& m_Device;

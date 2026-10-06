@@ -7,7 +7,29 @@ typedef ID3D11Device5 ID3D11DeviceBest;
 
 namespace nri {
 
-struct QueueD3D11;
+struct HostCopyLayoutD3D11 {
+    uint32_t mipWidth;
+    uint32_t mipHeight;
+    uint32_t mipDepth;
+    uint32_t width;
+    uint32_t height;
+    uint32_t depth;
+    uint32_t rowSize;
+    uint32_t rowNum;
+};
+
+struct HostCopyTextureD3D11 {
+    TextureD3D11* texture;
+    uint64_t size;
+    bool isInUse;
+};
+
+struct HostCopyReadbackD3D11 {
+    TextureD3D11* texture;
+    HostCopyLayoutD3D11 layout;
+    uint32_t subresource;
+    bool useBox;
+};
 
 struct DeviceD3D11 final : public DeviceBase {
     DeviceD3D11(const CallbackInterface& callbacks, const AllocationCallbacks& allocationCallbacks);
@@ -139,11 +161,13 @@ struct DeviceD3D11 final : public DeviceBase {
 
     Result GetQueue(QueueType queueType, uint32_t queueIndex, Queue*& queue);
     Result WaitIdle();
-    Result BindBufferMemory(const BindBufferMemoryDesc* bindBufferMemoryDescs, uint32_t bindBufferMemoryDescNum);
-    Result BindTextureMemory(const BindTextureMemoryDesc* bindTextureMemoryDescs, uint32_t bindTextureMemoryDescNum);
+    Result UploadHostMemoryToTexture(QueueD3D11& queue, const UploadHostMemoryToTextureDesc* copyDescs, uint32_t copyDescNum);
+    Result ReadbackTextureToHostMemory(QueueD3D11& queue, const ReadbackTextureToHostMemoryDesc* copyDescs, uint32_t copyDescNum);
     FormatSupportBits GetFormatSupport(Format format) const;
 
 private:
+    Result AcquireHostCopyTexture(const TextureD3D11& texture, uint32_t width, uint32_t height, uint32_t depth, TextureD3D11*& hostCopyTexture, uint32_t& hostCopySubresource);
+    void ReleaseHostCopyTexture(TextureD3D11& hostCopyTexture);
     void FillDesc();
     void InitializeNvExt(bool disableNVAPIInitialization, bool isImported);
     void InitializeAmdExt(AGSContext* agsContext, bool isImported);
@@ -163,14 +187,17 @@ private:
     ComPtr<ID3D11DeviceContextBest> m_ImmediateContext;
     ComPtr<ID3D11Multithread> m_Multithread;
     ComPtr<ID3D11Buffer> m_ZeroBuffer;
+    Vector<HostCopyTextureD3D11> m_HostCopyTextures;
+    uint64_t m_HostCopyTextureCacheSize = 0;
     std::array<Vector<QueueD3D11*>, (size_t)QueueType::MAX_NUM> m_QueueFamilies;
-    CRITICAL_SECTION m_CriticalSection = {}; // TODO: Lock?
+    CRITICAL_SECTION m_CriticalSection = {};
     CoreInterface m_iCore = {};
     DeviceDesc m_Desc = {};
     uint8_t m_Version = 0;
     uint8_t m_ImmediateContextVersion = 0;
     bool m_IsWrapped = false;
     bool m_IsDeferredContextEmulated = false;
+    bool m_IsCriticalSectionInitialized = false;
 };
 
 } // namespace nri

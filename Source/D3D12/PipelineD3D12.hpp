@@ -1,5 +1,151 @@
 ﻿// © 2021 NVIDIA Corporation
 
+// Hash helpers
+static constexpr uint64_t FNV_INIT = 0xCBF29CE484222325ULL;
+static constexpr uint64_t FNV_PRIME = 0x100000001B3ULL;
+
+static inline uint64_t Fnv1a64(uint64_t hash, const void* data, size_t size) {
+    const uint8_t* bytes = (const uint8_t*)data;
+    for (size_t i = 0; i < size; i++) {
+        hash ^= bytes[i];
+        hash *= FNV_PRIME;
+    }
+    return hash;
+}
+
+// Per-field absorb - "T" must be a primitive/enum (no padding); structs are decomposed below.
+template <typename T>
+static inline uint64_t HashField(uint64_t h, const T& field) {
+    return Fnv1a64(h, &field, sizeof(T));
+}
+
+static inline uint64_t HashStruct(uint64_t h, const InputAssemblyDesc& s) {
+    h = HashField(h, s.topology);
+    h = HashField(h, s.tessControlPointNum);
+    h = HashField(h, s.primitiveRestart);
+    return h;
+}
+
+static inline uint64_t HashStruct(uint64_t h, const DepthBiasDesc& s) {
+    h = HashField(h, s.constant);
+    h = HashField(h, s.clamp);
+    h = HashField(h, s.slope);
+    return h;
+}
+
+static inline uint64_t HashStruct(uint64_t h, const RasterizationDesc& s) {
+    h = HashStruct(h, s.depthBias);
+    h = HashField(h, s.fillMode);
+    h = HashField(h, s.cullMode);
+    h = HashField(h, s.frontCounterClockwise);
+    h = HashField(h, s.depthClamp);
+    h = HashField(h, s.lineSmoothing);
+    h = HashField(h, s.conservativeRaster);
+    h = HashField(h, s.shadingRate);
+    return h;
+}
+
+static inline uint64_t HashStruct(uint64_t h, const MultisampleDesc& s) {
+    h = HashField(h, s.sampleMask);
+    h = HashField(h, s.sampleNum);
+    h = HashField(h, s.alphaToCoverage);
+    h = HashField(h, s.sampleLocations);
+    return h;
+}
+
+static inline uint64_t HashStruct(uint64_t h, const DepthAttachmentDesc& s) {
+    h = HashField(h, s.compareOp);
+    h = HashField(h, s.write);
+    h = HashField(h, s.boundsTest);
+    return h;
+}
+
+static inline uint64_t HashStruct(uint64_t h, const StencilDesc& s) {
+    h = HashField(h, s.compareOp);
+    h = HashField(h, s.failOp);
+    h = HashField(h, s.passOp);
+    h = HashField(h, s.depthFailOp);
+    h = HashField(h, s.writeMask);
+    h = HashField(h, s.compareMask);
+    return h;
+}
+
+static inline uint64_t HashStruct(uint64_t h, const StencilAttachmentDesc& s) {
+    h = HashStruct(h, s.front);
+    h = HashStruct(h, s.back);
+    return h;
+}
+
+static inline uint64_t HashStruct(uint64_t h, const BlendDesc& s) {
+    h = HashField(h, s.srcFactor);
+    h = HashField(h, s.dstFactor);
+    h = HashField(h, s.op);
+    return h;
+}
+
+static inline uint64_t HashStruct(uint64_t h, const ColorAttachmentDesc& s) {
+    h = HashField(h, s.format);
+    h = HashStruct(h, s.colorBlend);
+    h = HashStruct(h, s.alphaBlend);
+    h = HashField(h, s.colorWriteMask);
+    h = HashField(h, s.blendEnabled);
+    return h;
+}
+
+static uint64_t HashGraphicsPipelineDesc(const GraphicsPipelineDesc& d) {
+    uint64_t h = FNV_INIT;
+    for (uint32_t i = 0; i < d.shaderNum; i++) {
+        h = Fnv1a64(h, d.shaders[i].bytecode, (size_t)d.shaders[i].size);
+        h = HashField(h, d.shaders[i].stage);
+    }
+    h = HashStruct(h, d.inputAssembly);
+    h = HashStruct(h, d.rasterization);
+    if (d.multisample)
+        h = HashStruct(h, *d.multisample);
+    if (d.vertexInput) {
+        h = HashField(h, d.vertexInput->attributeNum);
+        h = HashField(h, d.vertexInput->streamNum);
+        for (uint32_t i = 0; i < d.vertexInput->attributeNum; i++) {
+            const VertexAttributeDesc& a = d.vertexInput->attributes[i];
+            h = HashField(h, a.d3d.semanticIndex);
+            if (a.d3d.semanticName)
+                h = Fnv1a64(h, a.d3d.semanticName, strlen(a.d3d.semanticName));
+            h = HashField(h, a.vk.location);
+            h = HashField(h, a.offset);
+            h = HashField(h, a.format);
+            h = HashField(h, a.streamIndex);
+        }
+        for (uint32_t i = 0; i < d.vertexInput->streamNum; i++) {
+            const VertexStreamDesc& s = d.vertexInput->streams[i];
+            h = HashField(h, s.bindingSlot);
+            h = HashField(h, s.stepRate);
+        }
+    }
+    h = HashField(h, d.outputMerger.colorNum);
+    h = HashStruct(h, d.outputMerger.depth);
+    h = HashStruct(h, d.outputMerger.stencil);
+    h = HashField(h, d.outputMerger.depthStencilFormat);
+    h = HashField(h, d.outputMerger.logicOp);
+    h = HashField(h, d.outputMerger.viewMask);
+    h = HashField(h, d.outputMerger.multiview);
+    for (uint32_t i = 0; i < d.outputMerger.colorNum; i++)
+        h = HashStruct(h, d.outputMerger.colors[i]);
+    h = HashField(h, d.robustness);
+    return h;
+}
+
+static uint64_t HashComputePipelineDesc(const ComputePipelineDesc& d) {
+    uint64_t h = FNV_INIT;
+    h = Fnv1a64(h, d.shader.bytecode, (size_t)d.shader.size);
+    h = HashField(h, d.shader.stage);
+    h = HashField(h, d.robustness);
+    return h;
+}
+
+static void FormatPipelineCacheName(uint64_t hash, wchar_t (&buf)[24]) {
+    swprintf_s(buf, L"PSO_%016llX", (unsigned long long)hash);
+}
+
 template <typename DescComponent, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE subobjectType>
 struct alignas(void*) PipelineDescComponent {
     PipelineDescComponent() = default;
@@ -13,7 +159,7 @@ struct alignas(void*) PipelineDescComponent {
 };
 
 #if NRI_ENABLE_AGILITY_SDK_SUPPORT
-typedef PipelineDescComponent<D3D12_RASTERIZER_DESC1, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER> PipelineRasterizer;
+typedef PipelineDescComponent<D3D12_RASTERIZER_DESC1, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER1> PipelineRasterizer;
 typedef PipelineDescComponent<D3D12_DEPTH_STENCIL_DESC2, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL2> PipelineDepthStencil;
 #else
 typedef PipelineDescComponent<D3D12_RASTERIZER_DESC, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER> PipelineRasterizer;
@@ -81,7 +227,7 @@ static inline void FillRasterizerState(D3D12_RASTERIZER_DESC& rasterizerDesc, co
     rasterizerDesc.FrontCounterClockwise = (BOOL)r.frontCounterClockwise;
     rasterizerDesc.DepthBiasClamp = r.depthBias.clamp;
     rasterizerDesc.SlopeScaledDepthBias = r.depthBias.slope;
-    rasterizerDesc.DepthClipEnable = (BOOL)r.depthClamp;
+    rasterizerDesc.DepthClipEnable = (BOOL)!r.depthClamp;
     rasterizerDesc.AntialiasedLineEnable = (BOOL)r.lineSmoothing;
     rasterizerDesc.ConservativeRaster = r.conservativeRaster ? D3D12_CONSERVATIVE_RASTERIZATION_MODE_ON : D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
 
@@ -171,11 +317,11 @@ static inline void FillBlendState(D3D12_BLEND_DESC& blendDesc, const GraphicsPip
         if (colorAttachmentDesc.blendEnabled) {
             blendDesc.RenderTarget[i].LogicOp = GetLogicOp(om.logicOp);
             blendDesc.RenderTarget[i].LogicOpEnable = om.logicOp != LogicOp::NONE ? TRUE : FALSE;
-            blendDesc.RenderTarget[i].SrcBlend = GetBlend(colorAttachmentDesc.colorBlend.srcFactor);
-            blendDesc.RenderTarget[i].DestBlend = GetBlend(colorAttachmentDesc.colorBlend.dstFactor);
+            blendDesc.RenderTarget[i].SrcBlend = GetBlend(colorAttachmentDesc.colorBlend.srcFactor, false);
+            blendDesc.RenderTarget[i].DestBlend = GetBlend(colorAttachmentDesc.colorBlend.dstFactor, false);
             blendDesc.RenderTarget[i].BlendOp = GetBlendOp(colorAttachmentDesc.colorBlend.op);
-            blendDesc.RenderTarget[i].SrcBlendAlpha = GetBlend(colorAttachmentDesc.alphaBlend.srcFactor);
-            blendDesc.RenderTarget[i].DestBlendAlpha = GetBlend(colorAttachmentDesc.alphaBlend.dstFactor);
+            blendDesc.RenderTarget[i].SrcBlendAlpha = GetBlend(colorAttachmentDesc.alphaBlend.srcFactor, true);
+            blendDesc.RenderTarget[i].DestBlendAlpha = GetBlend(colorAttachmentDesc.alphaBlend.dstFactor, true);
             blendDesc.RenderTarget[i].BlendOpAlpha = GetBlendOp(colorAttachmentDesc.alphaBlend.op);
         }
     }
@@ -303,8 +449,29 @@ Result PipelineD3D12::CreateFromStream(const GraphicsPipelineDesc& graphicsPipel
     pipelineStateStreamDesc.pPipelineStateSubobjectStream = &stateStream;
     pipelineStateStreamDesc.SizeInBytes = sizeof(stateStream);
 
-    HRESULT hr = m_Device->CreatePipelineState(&pipelineStateStreamDesc, IID_PPV_ARGS(&m_PipelineState));
+    PipelineCacheD3D12* cache = (PipelineCacheD3D12*)graphicsPipelineDesc.cache;
+    ID3D12PipelineLibrary1* lib = cache ? cache->GetLibrary() : nullptr;
+    wchar_t cacheName[24] = {};
+
+    HRESULT hr = E_FAIL;
+    if (lib) {
+        FormatPipelineCacheName(HashGraphicsPipelineDesc(graphicsPipelineDesc), cacheName);
+        hr = lib->LoadPipeline(cacheName, &pipelineStateStreamDesc, IID_PPV_ARGS(&m_PipelineState));
+        if (SUCCEEDED(hr))
+            return Result::SUCCESS;
+    }
+
+    if (graphicsPipelineDesc.flags & GraphicsPipelineBits::FAIL_ON_CACHE_MISS) {
+        NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D12PipelineLibrary::LoadPipeline");
+    }
+
+    hr = m_Device->CreatePipelineState(&pipelineStateStreamDesc, IID_PPV_ARGS(&m_PipelineState));
     NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D12Device2::CreatePipelineState");
+
+    if (lib) {
+        ExclusiveScope lock(cache->GetStoreLock());
+        lib->StorePipeline(cacheName, m_PipelineState); // ignore failures (e.g., name already present), fallback PSO is still valid
+    }
 
     return Result::SUCCESS;
 }
@@ -324,8 +491,31 @@ Result PipelineD3D12::Create(const ComputePipelineDesc& computePipelineDesc) {
 
     FillShaderBytecode(computePipleineStateDesc.CS, computePipelineDesc.shader);
 
-    HRESULT hr = m_Device->CreateComputePipelineState(&computePipleineStateDesc, IID_PPV_ARGS(&m_PipelineState));
+    PipelineCacheD3D12* cache = (PipelineCacheD3D12*)computePipelineDesc.cache;
+    ID3D12PipelineLibrary1* lib = cache ? cache->GetLibrary() : nullptr;
+    wchar_t cacheName[24] = {};
+
+    HRESULT hr = E_FAIL;
+    if (lib) {
+        FormatPipelineCacheName(HashComputePipelineDesc(computePipelineDesc), cacheName);
+        hr = lib->LoadComputePipeline(cacheName, &computePipleineStateDesc, IID_PPV_ARGS(&m_PipelineState));
+        if (SUCCEEDED(hr))
+            return Result::SUCCESS;
+    }
+
+    if (computePipelineDesc.flags & ComputePipelineBits::FAIL_ON_CACHE_MISS) {
+        NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D12PipelineLibrary::LoadComputePipeline");
+    }
+
+    hr = m_Device->CreateComputePipelineState(&computePipleineStateDesc, IID_PPV_ARGS(&m_PipelineState));
     NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D12Device::CreateComputePipelineState");
+
+    if (lib) {
+        ExclusiveScope lock(cache->GetStoreLock());
+
+        hr = lib->StorePipeline(cacheName, m_PipelineState);
+        NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D12PipelineLibrary::StorePipeline");
+    }
 
     return Result::SUCCESS;
 }
@@ -354,7 +544,7 @@ Result PipelineD3D12::Create(const RayTracingPipelineDesc& rayTracingPipelineDes
             rayTracingPipelineConfig.Flags |= D3D12_RAYTRACING_PIPELINE_FLAG_SKIP_TRIANGLES;
         if (rayTracingPipelineDesc.flags & RayTracingPipelineBits::SKIP_AABBS)
             rayTracingPipelineConfig.Flags |= D3D12_RAYTRACING_PIPELINE_FLAG_SKIP_PROCEDURAL_PRIMITIVES;
-#ifdef NRI_D3D12_HAS_OPACITY_MICROMAP
+#if NRI_ENABLE_AGILITY_SDK_SUPPORT
         if (rayTracingPipelineDesc.flags & RayTracingPipelineBits::ALLOW_MICROMAPS)
             rayTracingPipelineConfig.Flags |= D3D12_RAYTRACING_PIPELINE_FLAG_ALLOW_OPACITY_MICROMAPS;
 #endif
@@ -404,12 +594,23 @@ Result PipelineD3D12::Create(const RayTracingPipelineDesc& rayTracingPipelineDes
         stateSubobjectNum++;
     }
 
-    Vector<std::wstring> wEntryPointNames(rayTracingPipelineDesc.shaderLibrary->shaderNum, m_Device.GetStdAllocator());
+    size_t entryPointNameTotalLength = 0;
+    for (uint32_t i = 0; i < rayTracingPipelineDesc.shaderLibrary->shaderNum; i++) {
+        const char* entryPointName = rayTracingPipelineDesc.shaderLibrary->shaders[i].entryPointName;
+        entryPointNameTotalLength += entryPointName ? strlen(entryPointName) + 1 : 0;
+    }
+
+    Scratch<const wchar_t*> wEntryPointNames = NRI_ALLOCATE_SCRATCH(m_Device, const wchar_t*, rayTracingPipelineDesc.shaderLibrary->shaderNum);
+    Scratch<wchar_t> wEntryPointNameData = NRI_ALLOCATE_SCRATCH(m_Device, wchar_t, entryPointNameTotalLength);
+    wchar_t* wEntryPointName = wEntryPointNameData;
     for (uint32_t i = 0; i < rayTracingPipelineDesc.shaderLibrary->shaderNum; i++) {
         const ShaderDesc& shader = rayTracingPipelineDesc.shaderLibrary->shaders[i];
-        const size_t entryPointNameLength = shader.entryPointName != nullptr ? strlen(shader.entryPointName) + 1 : 0;
-        wEntryPointNames[i].resize(entryPointNameLength);
-        ConvertCharToWchar(shader.entryPointName, wEntryPointNames[i].data(), entryPointNameLength);
+        const size_t entryPointNameLength = shader.entryPointName ? strlen(shader.entryPointName) + 1 : 0;
+        wEntryPointNames[i] = entryPointNameLength ? wEntryPointName : L"";
+        if (entryPointNameLength) {
+            ConvertCharToWchar(shader.entryPointName, wEntryPointName, entryPointNameLength);
+            wEntryPointName += entryPointNameLength;
+        }
     }
 
     uint32_t hitGroupNum = 0;
@@ -425,7 +626,7 @@ Result PipelineD3D12::Create(const RayTracingPipelineDesc& rayTracingPipelineDes
             if (shaderIndex) {
                 uint32_t lookupIndex = shaderIndex - 1;
                 const ShaderDesc& shader = rayTracingPipelineDesc.shaderLibrary->shaders[lookupIndex];
-                const std::wstring& entryPointName = wEntryPointNames[lookupIndex];
+                const wchar_t* entryPointName = wEntryPointNames[lookupIndex];
                 if (shader.stage == StageBits::RAYGEN_SHADER || shader.stage == StageBits::MISS_SHADER || shader.stage == StageBits::CALLABLE_SHADER) {
                     shaderIndentifierName = entryPointName;
                     isHitGroup = false;
@@ -434,14 +635,14 @@ Result PipelineD3D12::Create(const RayTracingPipelineDesc& rayTracingPipelineDes
 
                 switch (shader.stage) {
                     case StageBits::INTERSECTION_SHADER:
-                        hitGroups[hitGroupNum].IntersectionShaderImport = entryPointName.c_str();
+                        hitGroups[hitGroupNum].IntersectionShaderImport = entryPointName;
                         hasIntersectionShader = true;
                         break;
                     case StageBits::CLOSEST_HIT_SHADER:
-                        hitGroups[hitGroupNum].ClosestHitShaderImport = entryPointName.c_str();
+                        hitGroups[hitGroupNum].ClosestHitShaderImport = entryPointName;
                         break;
                     case StageBits::ANY_HIT_SHADER:
-                        hitGroups[hitGroupNum].AnyHitShaderImport = entryPointName.c_str();
+                        hitGroups[hitGroupNum].AnyHitShaderImport = entryPointName;
                         break;
                     default:
                         NRI_CHECK(false, "Unexpected 'shader.stage'");
@@ -487,7 +688,7 @@ void PipelineD3D12::Bind(ID3D12GraphicsCommandList* graphicsCommandList) const {
         graphicsCommandList->IASetPrimitiveTopology(m_PrimitiveTopology);
 }
 
-NRI_INLINE Result PipelineD3D12::WriteShaderGroupIdentifiers(uint32_t baseShaderGroupIndex, uint32_t shaderGroupNum, void* dst) const {
+NRI_INLINE Result PipelineD3D12::WriteShaderGroupIdentifiers(uint32_t baseShaderGroupIndex, uint32_t shaderGroupNum, uint32_t dstStride, void* dst) const {
     uint8_t* ptr = (uint8_t*)dst;
     size_t identifierSize = (size_t)m_Device.GetDesc().shaderStage.rayTracing.shaderGroupIdentifierSize;
     uint32_t shaderGroupIndex = baseShaderGroupIndex;
@@ -496,7 +697,7 @@ NRI_INLINE Result PipelineD3D12::WriteShaderGroupIdentifiers(uint32_t baseShader
         const void* identifier = m_StateObjectProperties->GetShaderIdentifier(m_ShaderGroupNames[shaderGroupIndex].c_str());
         memcpy(ptr, identifier, identifierSize);
 
-        ptr += identifierSize;
+        ptr += dstStride;
         shaderGroupIndex++;
     }
 

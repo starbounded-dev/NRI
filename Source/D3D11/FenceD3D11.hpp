@@ -5,7 +5,12 @@ Result FenceD3D11::Create(uint64_t initialValue) {
         return Result::SUCCESS;
 
     if (m_Device.GetVersion() >= 5) {
+        // Try "monitored" fence (better) first
         HRESULT hr = m_Device->CreateFence(initialValue, D3D11_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_Fence));
+        if (FAILED(hr)) {
+            // Fallback to "non monitored" fence (legacy) for pre-WDDM 2.0 or virtualized environments
+            hr = m_Device->CreateFence(initialValue, D3D11_FENCE_FLAG_NON_MONITORED, IID_PPV_ARGS(&m_Fence));
+        }
         NRI_RETURN_ON_BAD_HRESULT(&m_Device, hr, "ID3D11Device5::CreateFence");
     } else {
         D3D11_QUERY_DESC queryDesc = {};
@@ -54,7 +59,7 @@ NRI_INLINE void FenceD3D11::Wait(uint64_t value) {
             HRESULT hr = m_Fence->SetEventOnCompletion(value, m_Event);
             NRI_RETURN_VOID_ON_BAD_HRESULT(&m_Device, hr, "ID3D11Fence::SetEventOnCompletion");
 
-            uint32_t result = WaitForSingleObjectEx(m_Event, TIMEOUT_FENCE, TRUE);
+            uint32_t result = WaitForSingleObjectEx(m_Event, NRI_TIMEOUT_FENCE, TRUE);
             NRI_RETURN_ON_FAILURE(&m_Device, result == WAIT_OBJECT_0, ReturnVoid(), "WaitForSingleObjectEx() failed!");
         }
     } else if (m_Query) {
