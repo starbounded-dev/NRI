@@ -253,3 +253,10 @@ Supported:
 ## LICENSE
 
 *NRI* is licensed under the MIT License.
+
+## LUX-PATCHES
+
+This is the `lux` branch of [starbounded-dev/NRI](https://github.com/starbounded-dev/NRI): StudioCherno's `hazel` branch merged with upstream `main`, plus these patches for [LuxEngine](https://github.com/starbounded-dev/LuxEngine). Their source changes are marked `(Lux patch)` (`(Lux/Hazel patch)` for StudioCherno's). Keep them small, so upstream merges stay easy.
+
+- **Surface functions** (VK): a wrapped instance loads only the platform surface functions whose extensions it enabled. GLFW enables one window system's, and NRI used to fail device creation on the others.
+- **LUX-1 wide lines** (VK): graphics pipelines that rasterize lines (line topologies or `FillMode::WIREFRAME`) get `VK_DYNAMIC_STATE_LINE_WIDTH` when the device supports `wideLines`. `CmdSetPipeline` sets a width of 1, and the app may then call `vkCmdSetLineWidth` on the native command buffer. To be retired once Lux draws wide lines as quads.

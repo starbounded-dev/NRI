@@ -1024,6 +1024,7 @@ Result DeviceVK::Create(const DeviceCreationDesc& desc, const DeviceCreationVKDe
     m_IsSupported.imageSlicedView = ImageSlicedViewOf3DFeatures.imageSlicedViewOf3D != 0;
     m_IsSupported.customBorderColor = CustomBorderColorFeatures.customBorderColors != 0 && CustomBorderColorFeatures.customBorderColorWithoutFormat != 0;
     m_IsSupported.robustness = features.features.robustBufferAccess != 0 && features13.robustImageAccess != 0;
+    m_IsSupported.wideLines = features.features.wideLines != 0; // (Lux patch, LUX-1)
     m_IsSupported.robustness2 = Robustness2Features.robustBufferAccess2 != 0 && Robustness2Features.robustImageAccess2 != 0;
     m_IsSupported.pipelineRobustness = features14.pipelineRobustness;
     m_IsSupported.swapChainMaintenance1 = SwapchainMaintenance1Features.swapchainMaintenance1;
@@ -2245,6 +2246,7 @@ Result DeviceVK::ResolveDispatchTable(const Vector<const char*>& desiredDeviceEx
     GET_DEVICE_CORE_FUNC(CmdSetStencilReference);
     GET_DEVICE_CORE_FUNC(CmdSetBlendConstants);
     GET_DEVICE_CORE_FUNC(CmdSetDepthBias);
+    GET_DEVICE_CORE_FUNC(CmdSetLineWidth); // (Lux patch, LUX-1)
     GET_DEVICE_CORE_FUNC(CmdClearAttachments);
     GET_DEVICE_CORE_FUNC(CmdClearColorImage);
     GET_DEVICE_CORE_FUNC(CmdSetViewport);

@@ -390,6 +390,14 @@ Result PipelineVK::Create(const GraphicsPipelineDesc& graphicsPipelineDesc) {
     if (r.shadingRate)
         dynamicStates[dynamicStateNum++] = VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR;
 
+    // (Lux patch, LUX-1) Pipelines that rasterize lines take their width at bind time: "SetPipeline"
+    // sets 1, the width of every other pipeline, and the app may set another with "vkCmdSetLineWidth"
+    const bool isLineTopology = ia.topology == Topology::LINE_LIST || ia.topology == Topology::LINE_STRIP
+        || ia.topology == Topology::LINE_LIST_WITH_ADJACENCY || ia.topology == Topology::LINE_STRIP_WITH_ADJACENCY;
+    m_DynamicLineWidth = m_Device.m_IsSupported.wideLines && (isLineTopology || r.fillMode == FillMode::WIREFRAME);
+    if (m_DynamicLineWidth)
+        dynamicStates[dynamicStateNum++] = VK_DYNAMIC_STATE_LINE_WIDTH;
+
     VkPipelineDynamicStateCreateInfo dynamicState = {VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
     dynamicState.dynamicStateCount = dynamicStateNum;
     dynamicState.pDynamicStates = dynamicStates.data();

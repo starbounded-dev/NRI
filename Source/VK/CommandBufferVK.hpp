@@ -1955,6 +1955,10 @@ NRI_INLINE void CommandBufferVK::SetPipeline(const Pipeline& pipeline) {
     const DepthBiasDesc& depthBias = pipelineVK.GetDepthBias();
     if (IsDepthBiasEnabled(depthBias))
         vk.CmdSetDepthBias(m_Handle, depthBias.constant, depthBias.clamp, depthBias.slope);
+
+    // (Lux patch, LUX-1) The static width, until the app sets another
+    if (pipelineVK.IsDynamicLineWidth())
+        vk.CmdSetLineWidth(m_Handle, 1.0f);
 }
 
 NRI_INLINE void CommandBufferVK::SetDescriptorSet(const SetDescriptorSetDesc& setDescriptorSetDesc) {

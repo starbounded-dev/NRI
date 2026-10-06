@@ -133,6 +133,7 @@ struct IsSupported {
     uint32_t videoMaintenance2            : 1;
     uint32_t videoEncodeAV1               : 1;
     uint32_t descriptorHeap               : 1;
+    uint32_t wideLines                    : 1; // (Lux patch, LUX-1)
 };
 
 static_assert(sizeof(IsSupported) == sizeof(uint32_t), "4 bytes expected");

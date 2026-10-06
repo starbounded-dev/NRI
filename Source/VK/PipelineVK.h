@@ -25,6 +25,11 @@ struct PipelineVK final : public DebugNameBase {
         return m_DepthBias;
     }
 
+    // (Lux patch, LUX-1) True for a graphics pipeline that rasterizes lines on a device with "wideLines"
+    inline bool IsDynamicLineWidth() const {
+        return m_DynamicLineWidth;
+    }
+
     ~PipelineVK();
 
     Result Create(const GraphicsPipelineDesc& graphicsPipelineDesc);
@@ -52,6 +57,7 @@ private:
     VkPipeline m_Handle = VK_NULL_HANDLE;
     VkPipelineBindPoint m_BindPoint = VK_PIPELINE_BIND_POINT_MAX_ENUM;
     DepthBiasDesc m_DepthBias = {};
+    bool m_DynamicLineWidth = false; // (Lux patch, LUX-1)
     bool m_OwnsNativeObjects = true;
 };
 
