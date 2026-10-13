@@ -485,6 +485,10 @@ NRI_INLINE Result SwapChainVK::AcquireNextTexture(FenceVK& acquireSemaphore, uin
 
     const auto& vk = m_Device.GetDispatchTable();
     VkResult vkResult = vk.AcquireNextImage2KHR(m_Device, &acquireInfo, &m_TextureIndex);
+    // (Lux patch, LUX-3) "OUT_OF_DATE" is a documented result the caller handles by recreating the
+    // swap chain (it is routine while a window resizes), not an error to report.
+    if (vkResult == VK_ERROR_OUT_OF_DATE_KHR)
+        return Result::OUT_OF_DATE;
     NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "AcquireNextImage2KHR");
 
     // (Lux/Hazel patch) The macro above only rejects negative results, so a timed-out acquire
@@ -546,6 +550,9 @@ NRI_INLINE Result SwapChainVK::Present(FenceVK& releaseSemaphore, uint64_t prese
     if ((m_Flags & SwapChainBits::ALLOW_LOW_LATENCY) && presentIdValue != 0)
         SetLatencyMarker(presentIdValue, (LatencyMarker)VK_LATENCY_MARKER_PRESENT_END_NV);
 
+    // (Lux patch, LUX-3) As for "AcquireNextTexture"
+    if (vkResult == VK_ERROR_OUT_OF_DATE_KHR)
+        return Result::OUT_OF_DATE;
     NRI_RETURN_ON_BAD_VKRESULT(&m_Device, vkResult, "QueuePresentKHR");
 
     return Result::SUCCESS;

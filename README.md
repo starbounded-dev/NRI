@@ -260,3 +260,5 @@ This is the `lux` branch of [starbounded-dev/NRI](https://github.com/starbounded
 
 - **Surface functions** (VK): a wrapped instance loads only the platform surface functions whose extensions it enabled. GLFW enables one window system's, and NRI used to fail device creation on the others.
 - **LUX-1 wide lines** (VK): graphics pipelines that rasterize lines (line topologies or `FillMode::WIREFRAME`) get `VK_DYNAMIC_STATE_LINE_WIDTH` when the device supports `wideLines`. `CmdSetPipeline` sets a width of 1, and the app may then call `vkCmdSetLineWidth` on the native command buffer. To be retired once Lux draws wide lines as quads.
+- **LUX-2 mesh-shader statistics** (VK): pipeline-statistics pools count task and mesh invocations only with `meshShaderQueries` (`features.meshShaderPipelineStats`), as Vulkan requires, not whenever mesh shaders are supported.
+- **LUX-3 out-of-date swap chains** (VK): `AcquireNextTexture` and `QueuePresent` return `OUT_OF_DATE` without reporting an error. The caller recreates the swap chain, which is routine while a window resizes.
